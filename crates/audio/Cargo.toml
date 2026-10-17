@@ -13,5 +13,5 @@ whisper = ["dep:whisper-rs"]
 anyhow.workspace = true
 cpal = "0.15"
 hound = "3.5"
-rodio = { version = "0.19", default-features = false, features = ["wav"] }
+rodio = { version = "0.23", default-features = false, features = ["wav"] }
 whisper-rs = { version = "0.16", optional = true }
