@@ -1,0 +1,17 @@
+[package]
+name = "vinculo-audio"
+version.workspace = true
+edition.workspace = true
+
+[features]
+# A transcrição local (whisper.cpp) fica atrás da feature `whisper`.
+# Se o whisper-rs não compilar neste ambiente, remova "whisper" do default.
+default = ["whisper"]
+whisper = ["dep:whisper-rs"]
+
+[dependencies]
+anyhow.workspace = true
+cpal = "0.15"
+hound = "3.5"
+rodio = { version = "0.19", default-features = false, features = ["wav"] }
+whisper-rs = { version = "0.16", optional = true }

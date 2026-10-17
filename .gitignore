@@ -1,0 +1,8 @@
+/target
+*.db
+*.db-wal
+*.db-shm
+# Nunca versionar PDFs (podem conter conteúdo clínico real)
+*.pdf
+# Áudios de sessão
+*.wav

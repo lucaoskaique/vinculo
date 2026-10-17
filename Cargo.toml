@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/storage", "crates/audio", "crates/ai", "crates/relatorio", "crates/app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+chrono = "0.4"
+anyhow = "1"

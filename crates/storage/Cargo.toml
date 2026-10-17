@@ -1,0 +1,10 @@
+[package]
+name = "vinculo-storage"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+vinculo-core = { path = "../core" }
+rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+chrono.workspace = true
+anyhow.workspace = true

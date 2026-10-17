@@ -1,0 +1,18 @@
+[package]
+name = "vinculo"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+vinculo-core = { path = "../core" }
+vinculo-storage = { path = "../storage" }
+vinculo-audio = { path = "../audio" }
+vinculo-ai = { path = "../ai" }
+vinculo-relatorio = { path = "../relatorio" }
+slint = "1"
+chrono.workspace = true
+anyhow.workspace = true
+open = "5"
+
+[build-dependencies]
+slint-build = "1"

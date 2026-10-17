@@ -1,0 +1,75 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.alvo }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            alvo: windows-x64
+            binario: vinculo.exe
+            artefato: vinculo-windows-x64.exe
+          - os: macos-latest
+            alvo: macos-arm64
+            binario: vinculo
+            artefato: vinculo-macos-arm64
+          - os: macos-13
+            alvo: macos-x64
+            binario: vinculo
+            artefato: vinculo-macos-x64
+          - os: ubuntu-latest
+            alvo: linux-x64
+            binario: vinculo
+            artefato: vinculo-linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Dependências (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang pkg-config libasound2-dev libssl-dev libfontconfig1-dev
+
+      - name: libclang (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
+      - name: Testes (crates puras)
+        if: runner.os == 'Linux'
+        run: cargo test --release -p vinculo-ai -p vinculo-relatorio -p vinculo-storage
+
+      - name: Build
+        run: cargo build --release -p vinculo
+
+      - name: Renomear binário
+        shell: bash
+        run: cp "target/release/${{ matrix.binario }}" "${{ matrix.artefato }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artefato }}
+          path: ${{ matrix.artefato }}
+
+      - name: Anexar à Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artefato }}
+          generate_release_notes: true

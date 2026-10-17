@@ -1,0 +1,817 @@
+import { ComboBox, LineEdit, ListView, ScrollView, TextEdit } from "std-widgets.slint";
+
+// ============================================================
+// Tokens — estética macOS
+//   fundo janela  #F5F5F7   texto primário  #1D1D1F
+//   sidebar       #ECECF1   texto secundário #6E6E73
+//   card          #FFFFFF   hairline        #E6E6EB
+//   accent (azul) #0A84FF   verde #34C759 / laranja #FF9500 / vermelho #FF3B30
+// ============================================================
+
+export struct SessaoVm {
+    id: int,
+    hora: string,
+    paciente: string,
+    status: string,
+    pago: bool,
+}
+
+export struct PacienteVm {
+    nome: string,
+    telefone: string,
+    email: string,
+}
+
+export struct EvolucaoVm {
+    id: int,
+    data: string,
+    conteudo: string,
+}
+
+export struct FinItemVm {
+    id: int,
+    data: string,
+    paciente: string,
+    valor: string,
+    pago: bool,
+}
+
+// ---------- componentes base ----------
+
+component TituloGrande inherits Text {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.4px;
+    color: #1d1d1f;
+    vertical-alignment: center;
+}
+
+component Secundario inherits Text {
+    font-size: 13px;
+    color: #6e6e73;
+}
+
+component Rotulo inherits Text {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    color: #6e6e73;
+}
+
+component Cartao inherits Rectangle {
+    background: white;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: #e6e6eb;
+    drop-shadow-blur: 10px;
+    drop-shadow-offset-y: 2px;
+    drop-shadow-color: #0000000d;
+}
+
+component Botao inherits Rectangle {
+    in property <string> texto;
+    in property <bool> primario: false;
+    in property <bool> perigo: false;
+    in property <bool> enabled: true;
+    callback clicado;
+
+    height: 34px;
+    border-radius: 8px;
+    opacity: enabled ? 1 : 0.45;
+    background: perigo ? (ta.pressed ? #d32f30 : ta.has-hover ? #e8362a : #ff3b30)
+        : primario ? (ta.pressed ? #0063c7 : ta.has-hover ? #0a76e8 : #0a84ff)
+        : (ta.pressed ? #d9d9de : ta.has-hover ? #e9e9ee : #f2f2f5);
+    animate background { duration: 120ms; }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicado(); }
+    }
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        Text {
+            text: texto;
+            font-size: 13px;
+            font-weight: 600;
+            color: (primario || perigo) ? white : #1d1d1f;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+component Chip inherits Rectangle {
+    in property <string> texto;
+    in property <color> fundo: #f2f2f5;
+    in property <color> cor: #6e6e73;
+
+    height: 24px;
+    border-radius: 12px;
+    background: fundo;
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        Text {
+            text: texto;
+            font-size: 12px;
+            font-weight: 600;
+            color: cor;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component NavItem inherits Rectangle {
+    in property <string> rotulo;
+    in property <bool> ativo;
+    callback clicado;
+
+    height: 36px;
+    border-radius: 8px;
+    background: ativo ? #0a84ff : (ta.has-hover ? #e2e2e8 : transparent);
+    animate background { duration: 120ms; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicado(); }
+    }
+    HorizontalLayout {
+        padding-left: 12px;
+        Text {
+            text: rotulo;
+            color: ativo ? white : #1d1d1f;
+            vertical-alignment: center;
+            font-size: 13px;
+            font-weight: ativo ? 600 : 400;
+        }
+    }
+}
+
+// Card clicável de linha (hover sutil, como listas do macOS).
+component CartaoLinha inherits Rectangle {
+    in property <bool> clicavel: false;
+    callback clicado;
+
+    background: ta.has-hover && clicavel ? #fbfbfd : white;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: #e6e6eb;
+    drop-shadow-blur: 8px;
+    drop-shadow-offset-y: 1px;
+    drop-shadow-color: #0000000a;
+    animate background { duration: 120ms; }
+
+    ta := TouchArea {
+        enabled: root.clicavel;
+        mouse-cursor: clicavel ? pointer : default;
+        clicked => { root.clicado(); }
+    }
+    @children
+}
+
+export component MainWindow inherits Window {
+    title: "Vínculo";
+    preferred-width: 1120px;
+    preferred-height: 740px;
+    background: #f5f5f7;
+    default-font-size: 13px;
+    default-font-family: "Segoe UI Variable Text";
+
+    // Agenda
+    in-out property <[SessaoVm]> sessoes;
+    in-out property <string> data-hoje;
+    in-out property <[string]> nomes-pacientes;
+    // Pacientes
+    in-out property <[PacienteVm]> pacientes;
+    // Prontuário
+    in-out property <[EvolucaoVm]> evolucoes;
+    in-out property <string> pront-status;
+    // Financeiro
+    in-out property <[FinItemVm]> fin-itens;
+    in-out property <string> fin-mes;
+    in-out property <string> fin-recebido;
+    in-out property <string> fin-pendente;
+    // Sessão (Smart Notes + IA)
+    in-out property <[string]> microfones;
+    in-out property <[string]> saidas-audio;
+    in-out property <string> sessao-titulo;
+    in-out property <string> status-nota;
+    in-out property <string> transcricao;
+    in-out property <string> rascunho;
+    in-out property <bool> gravando: false;
+    in-out property <bool> ocupado: false;
+    in-out property <bool> tem-audio: false;
+    in-out property <bool> reproduzindo: false;
+    in-out property <string> duracao-audio;
+    in-out property <[float]> forma-onda;
+    in-out property <float> progresso-audio: 0;
+    in-out property <bool> confirmar-apagar: false;
+    in-out property <int> fonte-escolhida: 0;
+    in-out property <int> mic-escolhido: 0;
+    in-out property <int> saida-escolhida: 0;
+    // Configurações
+    in-out property <string> cfg-nome;
+    in-out property <string> cfg-crp;
+    in-out property <string> cfg-email;
+    in-out property <string> cfg-telefone;
+    in-out property <string> cfg-status-ia;
+    in-out property <string> cfg-status;
+
+    in-out property <int> tela: 0;
+
+    callback tela-mudou(int);
+    callback mudar-dia(int);
+    callback criar-sessao(int, string, string);
+    callback abrir-sessao(int);
+    callback adicionar-paciente(string, string, string);
+    callback carregar-prontuario(int);
+    callback mudar-mes(int);
+    callback alternar-pago(int);
+    callback alternar-gravacao(int, int, int); // fonte, microfone, saída
+    callback alternar-reproducao();
+    callback apagar-gravacao();
+    callback transcrever();
+    callback gerar-rascunho();
+    callback salvar-evolucao(string);
+    callback marcar-realizada();
+    callback salvar-perfil(string, string, string, string); // nome, crp, email, telefone
+    callback salvar-chave-ia(string);
+    callback exportar-evolucao(int);        // id da evolução (prontuário)
+    callback exportar-rascunho(string);     // texto atual do editor (sessão)
+    // Invocados pelo Rust quando tarefas em background terminam.
+    callback nota-transcrita(string);
+    callback rascunho-gerado(string);
+    callback tarefa-falhou(string);
+
+    HorizontalLayout {
+        // ---------------- Sidebar (clara, estilo macOS) ----------------
+        Rectangle {
+            width: 230px;
+            background: #ececf1;
+
+            Rectangle {
+                x: parent.width - 1px;
+                width: 1px;
+                height: parent.height;
+                background: #dfdfe4;
+            }
+
+            VerticalLayout {
+                padding: 14px;
+                spacing: 4px;
+
+                VerticalLayout {
+                    padding-left: 10px;
+                    padding-top: 8px;
+                    padding-bottom: 18px;
+                    spacing: 2px;
+                    Text {
+                        text: "Vínculo";
+                        color: #1d1d1f;
+                        font-size: 20px;
+                        font-weight: 700;
+                        letter-spacing: -0.3px;
+                    }
+                    Text {
+                        text: "Consultório digital";
+                        color: #6e6e73;
+                        font-size: 12px;
+                    }
+                }
+
+                NavItem { rotulo: "Agenda";     ativo: tela == 0 || tela == 4; clicado => { tela = 0; root.tela-mudou(0); } }
+                NavItem { rotulo: "Pacientes";  ativo: tela == 1; clicado => { tela = 1; root.tela-mudou(1); } }
+                NavItem { rotulo: "Prontuário"; ativo: tela == 2; clicado => { tela = 2; root.tela-mudou(2); } }
+                NavItem { rotulo: "Financeiro"; ativo: tela == 3; clicado => { tela = 3; root.tela-mudou(3); } }
+                Rectangle { }
+                NavItem { rotulo: "Configurações"; ativo: tela == 5; clicado => { tela = 5; root.tela-mudou(5); } }
+
+                Text {
+                    text: "Seus dados ficam só nesta máquina.";
+                    color: #8e8e93;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        // ---------------- Conteúdo ----------------
+        VerticalLayout {
+            padding: 28px;
+            spacing: 16px;
+
+            // ---------------- Agenda ----------------
+            if tela == 0 : VerticalLayout {
+                spacing: 16px;
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    VerticalLayout {
+                        spacing: 2px;
+                        horizontal-stretch: 1;
+                        TituloGrande { text: "Agenda"; }
+                        Secundario { text: data-hoje; }
+                    }
+                    Botao { texto: "‹"; clicado => { root.mudar-dia(-1); } }
+                    Botao { texto: "›"; clicado => { root.mudar-dia(1); } }
+                }
+
+                Cartao {
+                    height: 58px;
+                    HorizontalLayout {
+                        padding: 12px;
+                        spacing: 8px;
+                        cb-pac := ComboBox { model: nomes-pacientes; horizontal-stretch: 1; }
+                        le-hora := LineEdit { placeholder-text: "HH:MM"; width: 90px; }
+                        le-valor := LineEdit { placeholder-text: "Valor R$"; width: 100px; }
+                        Botao {
+                            texto: "Nova sessão";
+                            primario: true;
+                            clicado => {
+                                root.criar-sessao(cb-pac.current-index, le-hora.text, le-valor.text);
+                                le-hora.text = "";
+                                le-valor.text = "";
+                            }
+                        }
+                    }
+                }
+
+                ListView {
+                    for s in sessoes : Rectangle {
+                        height: 72px;
+                        CartaoLinha {
+                            x: 0; y: 4px;
+                            width: parent.width;
+                            height: 64px;
+                            clicavel: true;
+                            clicado => { root.abrir-sessao(s.id); }
+                            HorizontalLayout {
+                                padding: 16px;
+                                spacing: 16px;
+                                Text { text: s.hora; font-size: 15px; font-weight: 700; color: #0a84ff; vertical-alignment: center; }
+                                Text { text: s.paciente; font-size: 14px; font-weight: 600; color: #1d1d1f; vertical-alignment: center; horizontal-stretch: 1; }
+                                VerticalLayout {
+                                    alignment: center;
+                                    Chip { texto: s.status; }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    Chip {
+                                        texto: s.pago ? "Pago" : "Pendente";
+                                        fundo: s.pago ? #e6f7eb : #fff3e0;
+                                        cor: s.pago ? #1e8e3e : #b25e09;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ---------------- Pacientes ----------------
+            if tela == 1 : VerticalLayout {
+                spacing: 16px;
+
+                VerticalLayout {
+                    spacing: 2px;
+                    TituloGrande { text: "Pacientes"; }
+                    Secundario { text: "Cadastro e contatos"; }
+                }
+
+                Cartao {
+                    height: 58px;
+                    HorizontalLayout {
+                        padding: 12px;
+                        spacing: 8px;
+                        le-nome := LineEdit { placeholder-text: "Nome completo"; horizontal-stretch: 1; }
+                        le-tel := LineEdit { placeholder-text: "Telefone"; width: 150px; }
+                        le-email := LineEdit { placeholder-text: "E-mail"; width: 200px; }
+                        Botao {
+                            texto: "Adicionar";
+                            primario: true;
+                            clicado => {
+                                root.adicionar-paciente(le-nome.text, le-tel.text, le-email.text);
+                                le-nome.text = "";
+                                le-tel.text = "";
+                                le-email.text = "";
+                            }
+                        }
+                    }
+                }
+
+                ListView {
+                    for p in pacientes : Rectangle {
+                        height: 62px;
+                        CartaoLinha {
+                            x: 0; y: 4px;
+                            width: parent.width;
+                            height: 54px;
+                            HorizontalLayout {
+                                padding: 16px;
+                                spacing: 16px;
+                                Text { text: p.nome; font-size: 14px; font-weight: 600; color: #1d1d1f; vertical-alignment: center; horizontal-stretch: 1; }
+                                Text { text: p.telefone; font-size: 13px; color: #6e6e73; vertical-alignment: center; }
+                                Text { text: p.email; font-size: 13px; color: #6e6e73; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ---------------- Prontuário ----------------
+            if tela == 2 : VerticalLayout {
+                spacing: 16px;
+
+                VerticalLayout {
+                    spacing: 2px;
+                    TituloGrande { text: "Prontuário"; }
+                    Secundario { text: pront-status == "" ? "Evoluções clínicas por paciente" : pront-status; }
+                }
+
+                Cartao {
+                    height: 58px;
+                    HorizontalLayout {
+                        padding: 12px;
+                        spacing: 8px;
+                        cb-pront := ComboBox {
+                            model: nomes-pacientes;
+                            horizontal-stretch: 1;
+                            selected(valor) => { root.carregar-prontuario(self.current-index); }
+                        }
+                        Botao { texto: "Carregar"; clicado => { root.carregar-prontuario(cb-pront.current-index); } }
+                    }
+                }
+
+                ListView {
+                    for e in evolucoes : Rectangle {
+                        height: 172px;
+                        CartaoLinha {
+                            x: 0; y: 4px;
+                            width: parent.width;
+                            height: 164px;
+                            clip: true;
+                            VerticalLayout {
+                                padding: 16px;
+                                spacing: 8px;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Rotulo { text: e.data; vertical-alignment: center; horizontal-stretch: 1; }
+                                    Botao { texto: "Exportar PDF"; clicado => { root.exportar-evolucao(e.id); } }
+                                }
+                                Text { text: e.conteudo; font-size: 13px; color: #1d1d1f; wrap: word-wrap; overflow: elide; vertical-stretch: 1; }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ---------------- Financeiro ----------------
+            if tela == 3 : VerticalLayout {
+                spacing: 16px;
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    VerticalLayout {
+                        spacing: 2px;
+                        horizontal-stretch: 1;
+                        TituloGrande { text: "Financeiro"; }
+                        Secundario { text: fin-mes; }
+                    }
+                    Botao { texto: "‹"; clicado => { root.mudar-mes(-1); } }
+                    Botao { texto: "›"; clicado => { root.mudar-mes(1); } }
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    Cartao {
+                        horizontal-stretch: 1;
+                        height: 76px;
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 2px;
+                            Rotulo { text: "RECEBIDO"; }
+                            Text { text: fin-recebido; font-size: 22px; font-weight: 700; letter-spacing: -0.3px; color: #1e8e3e; }
+                        }
+                    }
+                    Cartao {
+                        horizontal-stretch: 1;
+                        height: 76px;
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 2px;
+                            Rotulo { text: "PENDENTE"; }
+                            Text { text: fin-pendente; font-size: 22px; font-weight: 700; letter-spacing: -0.3px; color: #b25e09; }
+                        }
+                    }
+                }
+
+                ListView {
+                    for f in fin-itens : Rectangle {
+                        height: 62px;
+                        CartaoLinha {
+                            x: 0; y: 4px;
+                            width: parent.width;
+                            height: 54px;
+                            HorizontalLayout {
+                                padding-left: 16px;
+                                padding-right: 10px;
+                                padding-top: 10px;
+                                padding-bottom: 10px;
+                                spacing: 16px;
+                                Text { text: f.data; font-size: 13px; color: #6e6e73; vertical-alignment: center; }
+                                Text { text: f.paciente; font-size: 14px; font-weight: 600; color: #1d1d1f; vertical-alignment: center; horizontal-stretch: 1; }
+                                Text { text: f.valor; font-size: 14px; font-weight: 700; color: #1d1d1f; vertical-alignment: center; }
+                                Botao {
+                                    texto: f.pago ? "Pago ✓" : "Marcar pago";
+                                    primario: !f.pago;
+                                    clicado => { root.alternar-pago(f.id); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ---------------- Configurações ----------------
+            if tela == 5 : ScrollView {
+                VerticalLayout {
+                width: parent.visible-width;
+                padding-right: 18px;
+                spacing: 16px;
+
+                VerticalLayout {
+                    spacing: 2px;
+                    TituloGrande { text: "Configurações"; }
+                    Secundario { text: "Seus dados e a chave da inteligência artificial"; }
+                }
+
+                Cartao {
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 10px;
+
+                        Rotulo { text: "PROFISSIONAL"; }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Rotulo { text: "Nome:"; vertical-alignment: center; width: 110px; }
+                            LineEdit { text <=> cfg-nome; placeholder-text: "Seu nome completo"; horizontal-stretch: 1; }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Rotulo { text: "CRP:"; vertical-alignment: center; width: 110px; }
+                            LineEdit { text <=> cfg-crp; placeholder-text: "Ex.: CRP 05/12345"; horizontal-stretch: 1; }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Rotulo { text: "E-mail:"; vertical-alignment: center; width: 110px; }
+                            LineEdit { text <=> cfg-email; placeholder-text: "voce@exemplo.com"; horizontal-stretch: 1; }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Rotulo { text: "Telefone:"; vertical-alignment: center; width: 110px; }
+                            LineEdit { text <=> cfg-telefone; placeholder-text: "(21) 99999-9999"; horizontal-stretch: 1; }
+                        }
+
+                        HorizontalLayout {
+                            Rectangle { }
+                            Botao {
+                                texto: "Salvar dados";
+                                primario: true;
+                                clicado => { root.salvar-perfil(cfg-nome, cfg-crp, cfg-email, cfg-telefone); }
+                            }
+                        }
+                    }
+                }
+
+                Cartao {
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 10px;
+
+                        Rotulo { text: "INTELIGÊNCIA ARTIFICIAL"; }
+                        Secundario { text: cfg-status-ia; wrap: word-wrap; }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Rotulo { text: "Chave da API:"; vertical-alignment: center; width: 110px; }
+                            le-chave := LineEdit {
+                                placeholder-text: "Cole aqui sua chave da Anthropic (sk-ant-…)";
+                                input-type: InputType.password;
+                                horizontal-stretch: 1;
+                            }
+                            Botao {
+                                texto: "Salvar chave";
+                                primario: true;
+                                enabled: le-chave.text != "";
+                                clicado => {
+                                    root.salvar-chave-ia(le-chave.text);
+                                    le-chave.text = "";
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: "A chave é usada apenas para gerar rascunhos de evolução e fica guardada neste computador. As transcrições são anonimizadas antes de qualquer envio. Se a variável de ambiente ANTHROPIC_API_KEY estiver definida, ela tem prioridade sobre a chave salva aqui.";
+                            font-size: 12px;
+                            color: #6e6e73;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                Secundario { text: cfg-status; wrap: word-wrap; }
+                }
+            }
+
+            // ---------------- Sessão (Smart Notes + IA) ----------------
+            if tela == 4 : ScrollView {
+                VerticalLayout {
+                width: parent.visible-width;
+                padding-right: 18px;
+                spacing: 12px;
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    Botao { texto: "‹ Agenda"; clicado => { tela = 0; root.tela-mudou(0); } }
+                    TituloGrande { text: sessao-titulo; horizontal-stretch: 1; }
+                    Botao { texto: "Marcar realizada"; clicado => { root.marcar-realizada(); } }
+                }
+
+                Secundario { text: status-nota; wrap: word-wrap; }
+
+                Cartao {
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 10px;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Rotulo { text: "Tipo de atendimento:"; vertical-alignment: center; width: 170px; }
+                            ComboBox {
+                                model: [
+                                    "Sessão online (Zoom, Meet…) — grava você e o paciente",
+                                    "Sessão presencial — grava pelo microfone",
+                                    "Somente o som do computador",
+                                ];
+                                current-index <=> fonte-escolhida;
+                                enabled: !gravando && !ocupado;
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        if fonte-escolhida != 2 : HorizontalLayout {
+                            spacing: 8px;
+                            Rotulo { text: "Seu microfone:"; vertical-alignment: center; width: 170px; }
+                            ComboBox {
+                                model: microfones;
+                                current-index <=> mic-escolhido;
+                                enabled: !gravando && !ocupado;
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        if fonte-escolhida != 1 : HorizontalLayout {
+                            spacing: 8px;
+                            Rotulo { text: "Paciente é ouvido em:"; vertical-alignment: center; width: 170px; }
+                            ComboBox {
+                                model: saidas-audio;
+                                current-index <=> saida-escolhida;
+                                enabled: !gravando && !ocupado;
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        if fonte-escolhida == 0 : Text {
+                            text: "Dica: use fone de ouvido na sessão online — assim a voz do paciente não vaza para o microfone e não fica duplicada na gravação.";
+                            font-size: 12px;
+                            color: #6e6e73;
+                            wrap: word-wrap;
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            // Indicador de gravação pulsante (assinatura, estilo macOS).
+                            if gravando : Rectangle {
+                                width: 26px;
+                                Rectangle {
+                                    x: 8px;
+                                    y: parent.height / 2 - 5px;
+                                    width: 10px;
+                                    height: 10px;
+                                    border-radius: 5px;
+                                    background: #ff3b30;
+                                    opacity: 0.35 + 0.65 * (0.5 + 0.5 * sin((animation-tick() / 1.2s) * 360deg));
+                                }
+                            }
+                            Botao {
+                                texto: gravando ? "Parar gravação" : "● Gravar sessão";
+                                perigo: true;
+                                enabled: !ocupado;
+                                clicado => {
+                                    root.alternar-gravacao(fonte-escolhida, mic-escolhido, saida-escolhida);
+                                }
+                            }
+                            Botao {
+                                texto: "Transcrever (local)";
+                                enabled: !ocupado && !gravando;
+                                clicado => { root.transcrever(); }
+                            }
+                            Botao {
+                                texto: "Gerar rascunho (IA)";
+                                primario: true;
+                                enabled: !ocupado && !gravando && transcricao != "";
+                                clicado => { root.gerar-rascunho(); }
+                            }
+                            Rectangle { }
+                        }
+
+                        // Conferência da gravação: forma de onda + ouvir/apagar.
+                        if tem-audio && !gravando : VerticalLayout {
+                            spacing: 8px;
+
+                            // Forma de onda; as barras já reproduzidas ficam azuis.
+                            Rectangle {
+                                height: 56px;
+                                background: #f5f5f7;
+                                border-radius: 8px;
+                                clip: true;
+                                for amp[idx] in forma-onda : Rectangle {
+                                    property <length> larg: parent.width / forma-onda.length;
+                                    x: idx * larg + larg * 0.15;
+                                    width: larg * 0.7;
+                                    height: max(2px, amp * (parent.height - 10px));
+                                    y: (parent.height - self.height) / 2;
+                                    border-radius: 1px;
+                                    background: idx < forma-onda.length * progresso-audio ? #0a84ff : #c9c9ce;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Botao {
+                                    texto: reproduzindo ? "■ Parar" : "▶ Ouvir gravação";
+                                    enabled: !ocupado;
+                                    clicado => { root.alternar-reproducao(); }
+                                }
+                                Secundario {
+                                    text: reproduzindo
+                                        ? "Reproduzindo… confira se as duas vozes foram captadas."
+                                        : "Duração: " + duracao-audio;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
+                                Botao {
+                                    texto: confirmar-apagar ? "Confirmar exclusão?" : "Apagar gravação";
+                                    perigo: confirmar-apagar;
+                                    enabled: !ocupado && !reproduzindo;
+                                    clicado => {
+                                        if (confirmar-apagar) {
+                                            confirmar-apagar = false;
+                                            root.apagar-gravacao();
+                                        } else {
+                                            confirmar-apagar = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rotulo { text: "TRANSCRIÇÃO"; }
+                TextEdit {
+                    text: transcricao;
+                    read-only: true;
+                    height: 130px;
+                }
+
+                Rotulo { text: "RASCUNHO DE EVOLUÇÃO — revise e edite antes de salvar"; }
+                TextEdit {
+                    text <=> rascunho;
+                    height: 300px;
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Rectangle { }
+                    Botao {
+                        texto: "Exportar PDF";
+                        enabled: rascunho != "" && !ocupado;
+                        clicado => { root.exportar-rascunho(rascunho); }
+                    }
+                    Botao {
+                        texto: "Salvar no prontuário";
+                        primario: true;
+                        enabled: rascunho != "" && !ocupado;
+                        clicado => { root.salvar-evolucao(rascunho); }
+                    }
+                }
+                }
+            }
+        }
+    }
+}
