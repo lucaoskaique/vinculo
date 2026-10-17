@@ -57,7 +57,7 @@ jobs:
         shell: bash
         run: cp "target/release/${{ matrix.binario }}" "${{ matrix.artefato }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artefato }}
           path: ${{ matrix.artefato }}
