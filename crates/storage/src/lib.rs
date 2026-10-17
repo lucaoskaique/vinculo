@@ -199,13 +199,21 @@ impl Db {
     }
 
     /// (caminho_do_audio, transcricao) da smart note da sessão, se existir.
-    pub fn nota_da_sessao(&self, sessao_id: i64) -> Result<Option<(Option<String>, Option<String>)>> {
+    pub fn nota_da_sessao(
+        &self,
+        sessao_id: i64,
+    ) -> Result<Option<(Option<String>, Option<String>)>> {
         let resultado = self
             .conn
             .query_row(
                 "SELECT audio_path, transcricao FROM smart_notes WHERE sessao_id = ?1",
                 params![sessao_id],
-                |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
+                |r| {
+                    Ok((
+                        r.get::<_, Option<String>>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                    ))
+                },
             )
             .optional()?;
         Ok(resultado)

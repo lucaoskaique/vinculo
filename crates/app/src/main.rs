@@ -66,7 +66,10 @@ fn recarregar_agenda(ui: &MainWindow, db: &Db, dia: NaiveDate) {
 fn recarregar_pacientes(ui: &MainWindow, db: &Db) -> Vec<i64> {
     let pacientes = db.listar_pacientes().unwrap_or_default();
     let ids: Vec<i64> = pacientes.iter().map(|p| p.id).collect();
-    let nomes: Vec<SharedString> = pacientes.iter().map(|p| SharedString::from(p.nome.as_str())).collect();
+    let nomes: Vec<SharedString> = pacientes
+        .iter()
+        .map(|p| SharedString::from(p.nome.as_str()))
+        .collect();
     let vms: Vec<PacienteVm> = pacientes
         .into_iter()
         .map(|p| PacienteVm {
@@ -118,14 +121,28 @@ fn formatar_data_registro(bruto: &str) -> SharedString {
 fn nome_arquivo_seguro(texto: &str) -> String {
     texto
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
 /// Gera o PDF da anotação em Documentos\Vinculo e abre no visualizador padrão.
 fn exportar_pdf(db: &Db, paciente: &str, data_sessao: &str, conteudo: &str) -> Result<PathBuf> {
-    let profissional = db.obter_config("perfil.nome").ok().flatten().unwrap_or_default();
-    let crp = db.obter_config("perfil.crp").ok().flatten().unwrap_or_default();
+    let profissional = db
+        .obter_config("perfil.nome")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let crp = db
+        .obter_config("perfil.crp")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     let destino_dir = vinculo_core::dir_documentos();
     std::fs::create_dir_all(&destino_dir)?;
     let destino = destino_dir.join(format!(
@@ -535,7 +552,9 @@ fn main() -> Result<()> {
                 ui.set_reproduzindo(false);
                 return;
             }
-            let Some(sessao_id) = estado.borrow().sessao_aberta else { return };
+            let Some(sessao_id) = estado.borrow().sessao_aberta else {
+                return;
+            };
             let Some(caminho) = db
                 .nota_da_sessao(sessao_id)
                 .ok()
@@ -598,7 +617,9 @@ fn main() -> Result<()> {
                 reprodutor.parar();
                 ui.set_reproduzindo(false);
             }
-            let Some(sessao_id) = estado.borrow().sessao_aberta else { return };
+            let Some(sessao_id) = estado.borrow().sessao_aberta else {
+                return;
+            };
             let caminho = db
                 .nota_da_sessao(sessao_id)
                 .ok()
@@ -674,7 +695,8 @@ fn main() -> Result<()> {
             ui.set_transcricao(texto);
             ui.set_ocupado(false);
             ui.set_status_nota(
-                "Transcrição concluída — processada localmente, o áudio não saiu desta máquina.".into(),
+                "Transcrição concluída — processada localmente, o áudio não saiu desta máquina."
+                    .into(),
             );
         }
     });
@@ -797,8 +819,12 @@ fn main() -> Result<()> {
         let estado = Rc::clone(&estado);
         move |texto| {
             let ui = ui_weak.unwrap();
-            let Some(sessao_id) = estado.borrow().sessao_aberta else { return };
-            let Ok((sessao, paciente)) = db.sessao_com_nome(sessao_id) else { return };
+            let Some(sessao_id) = estado.borrow().sessao_aberta else {
+                return;
+            };
+            let Ok((sessao, paciente)) = db.sessao_com_nome(sessao_id) else {
+                return;
+            };
             let data = sessao.inicio.format("%d/%m/%Y às %H:%M").to_string();
             match exportar_pdf(&db, &paciente, &data, texto.as_str()) {
                 Ok(caminho) => {

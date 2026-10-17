@@ -34,7 +34,10 @@ impl ConfigIa {
         let caminho = caminho_config()?;
         if caminho.exists() {
             let conteudo = std::fs::read_to_string(&caminho).with_context(|| {
-                format!("não foi possível ler o arquivo de configuração: {}", caminho.display())
+                format!(
+                    "não foi possível ler o arquivo de configuração: {}",
+                    caminho.display()
+                )
             })?;
             if let Some(chave) = extrair_api_key_toml(&conteudo) {
                 return Ok(ConfigIa { api_key: chave });
@@ -118,7 +121,10 @@ pub fn salvar_api_key(chave: &str) -> Result<PathBuf> {
 /// De onde a chave da API seria carregada agora, em texto para exibição.
 /// `None` = nenhuma chave configurada.
 pub fn origem_api_key() -> Option<String> {
-    if std::env::var("ANTHROPIC_API_KEY").map(|v| !v.trim().is_empty()).unwrap_or(false) {
+    if std::env::var("ANTHROPIC_API_KEY")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+    {
         return Some("variável de ambiente ANTHROPIC_API_KEY".to_string());
     }
     let caminho = caminho_config().ok()?;
@@ -180,7 +186,9 @@ pub fn anonimizar(texto: &str, nomes: &[&str]) -> (String, Vec<(String, String)>
         let re_nome = Regex::new(&padrao).expect("regex de nome inválida");
 
         if re_nome.is_match(&resultado) {
-            resultado = re_nome.replace_all(&resultado, placeholder.as_str()).into_owned();
+            resultado = re_nome
+                .replace_all(&resultado, placeholder.as_str())
+                .into_owned();
             // Uma entrada por pessoa: o placeholder restaura o nome completo.
             mapa.push((placeholder, nome.to_string()));
         }

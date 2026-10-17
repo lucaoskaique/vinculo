@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  qualidade:
+    name: qualidade
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang pkg-config libasound2-dev libssl-dev libfontconfig1-dev
+      - name: Formatação
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  testes:
+    name: testes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang pkg-config libasound2-dev libssl-dev libfontconfig1-dev
+      - name: Testes
+        run: cargo test --workspace
+
+  auditoria:
+    name: auditoria (RustSec)
+    runs-on: ubuntu-latest
+    # Informativa por enquanto: avisa sobre advisories sem bloquear o merge.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit

@@ -164,7 +164,12 @@ impl genpdf::PageDecorator for DecoradorRelatorio {
         );
 
         // Esquerda: crédito fixo.
-        area.print_str(&context.font_cache, Position::new(margem, y), estilo, TEXTO_RODAPE)?;
+        area.print_str(
+            &context.font_cache,
+            Position::new(margem, y),
+            estilo,
+            TEXTO_RODAPE,
+        )?;
 
         // Direita: numeração de página, alinhada pela largura medida do texto.
         let texto_pagina = match self.total_paginas {
@@ -212,9 +217,10 @@ impl Element for LinhaHorizontal {
             vec![Position::new(0.0, 0.3), Position::new(largura, 0.3)],
             Style::new().with_color(self.cor),
         );
-        let mut resultado = RenderResult::default();
-        resultado.size = Size::new(largura, Mm::from(0.8));
-        Ok(resultado)
+        Ok(RenderResult {
+            size: Size::new(largura, Mm::from(0.8)),
+            ..Default::default()
+        })
     }
 }
 
@@ -296,7 +302,12 @@ fn adicionar_corpo(doc: &mut Document, markdown: &str) {
             // então os 12.5pt pedidos viram 13pt).
             doc.push(
                 Paragraph::new(texto.trim())
-                    .styled(Style::new().bold().with_font_size(13).with_color(COR_SUBSECAO))
+                    .styled(
+                        Style::new()
+                            .bold()
+                            .with_font_size(13)
+                            .with_color(COR_SUBSECAO),
+                    )
                     .padded(Margins::trbl(2.5, 0.0, 1.0, 0.0)),
             );
             continue;
@@ -486,6 +497,11 @@ de exemplo\n- Segundo item de exemplo\n- Terceiro item de exemplo\n\n";
 
         let destino = std::env::temp_dir().join("vinculo_anotacao_teste_multipagina.pdf");
         gerar_pdf_anotacao(&dados, &destino).expect("geração do PDF multipágina deveria funcionar");
-        assert!(std::fs::metadata(&destino).expect("o PDF deveria existir").len() > 1024);
+        assert!(
+            std::fs::metadata(&destino)
+                .expect("o PDF deveria existir")
+                .len()
+                > 1024
+        );
     }
 }

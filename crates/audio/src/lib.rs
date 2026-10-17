@@ -90,9 +90,8 @@ impl Gravador {
         // Garante que os diretórios pais existem.
         if let Some(pai) = caminho_wav.parent() {
             if !pai.as_os_str().is_empty() {
-                std::fs::create_dir_all(pai).with_context(|| {
-                    format!("falha ao criar o diretório '{}'", pai.display())
-                })?;
+                std::fs::create_dir_all(pai)
+                    .with_context(|| format!("falha ao criar o diretório '{}'", pai.display()))?;
             }
         }
 
@@ -438,9 +437,8 @@ fn escrever_wav_mono_16k(caminho: &Path, amostras: &[f32]) -> Result<()> {
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    let mut escritor = hound::WavWriter::create(caminho, spec).with_context(|| {
-        format!("falha ao criar o arquivo WAV final '{}'", caminho.display())
-    })?;
+    let mut escritor = hound::WavWriter::create(caminho, spec)
+        .with_context(|| format!("falha ao criar o arquivo WAV final '{}'", caminho.display()))?;
     for &a in amostras {
         escritor
             .write_sample((a.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
@@ -563,16 +561,14 @@ fn transcrever_whisper(amostras: &[f32], caminho_modelo: &Path) -> Result<String
         .to_str()
         .ok_or_else(|| anyhow!("caminho do modelo contém caracteres inválidos (não UTF-8)"))?;
 
-    let contexto = WhisperContext::new_with_params(
-        caminho_modelo_str,
-        WhisperContextParameters::default(),
-    )
-    .with_context(|| {
-        format!(
-            "falha ao carregar o modelo whisper em '{}'",
-            caminho_modelo.display()
-        )
-    })?;
+    let contexto =
+        WhisperContext::new_with_params(caminho_modelo_str, WhisperContextParameters::default())
+            .with_context(|| {
+                format!(
+                    "falha ao carregar o modelo whisper em '{}'",
+                    caminho_modelo.display()
+                )
+            })?;
 
     let mut estado = contexto
         .create_state()
@@ -637,7 +633,10 @@ impl Reprodutor {
             .map_err(|e| anyhow!("falha ao decodificar a gravação: {e}"))?;
         sink.append(fonte);
         sink.play();
-        Ok(Reprodutor { _stream: stream, sink })
+        Ok(Reprodutor {
+            _stream: stream,
+            sink,
+        })
     }
 
     /// `true` quando a reprodução chegou ao fim.
@@ -697,7 +696,10 @@ pub fn forma_de_onda(caminho: &Path, colunas: usize) -> Result<Vec<f32>> {
         hound::SampleFormat::Int => {
             let escala = (1i64 << (spec.bits_per_sample - 1)) as f32;
             for (i, amostra) in leitor.samples::<i32>().enumerate() {
-                registrar(i, amostra.context("falha ao ler amostras do WAV")? as f32 / escala);
+                registrar(
+                    i,
+                    amostra.context("falha ao ler amostras do WAV")? as f32 / escala,
+                );
             }
         }
     }
