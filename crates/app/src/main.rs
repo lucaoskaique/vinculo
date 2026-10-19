@@ -22,10 +22,10 @@ fn caminho_modelo() -> PathBuf {
     dir_dados().join("models").join("ggml-base.bin")
 }
 
-/// Baixa o modelo de transcrição para `destino`, reportando o progresso (0–100).
-/// Grava num arquivo .part e renomeia ao final, para nunca deixar um modelo
-/// corrompido no caminho definitivo.
-fn baixar_modelo(destino: &std::path::Path, progresso: impl Fn(u32)) -> Result<()> {
+/// Baixa `url` para `destino`, reportando o progresso (0–100).
+/// Grava num arquivo .part e renomeia ao final, para nunca deixar um
+/// download corrompido no caminho definitivo.
+fn baixar_arquivo(url: &str, destino: &std::path::Path, progresso: impl Fn(u32)) -> Result<()> {
     use std::io::{Read, Write};
 
     if let Some(pai) = destino.parent() {
@@ -33,8 +33,9 @@ fn baixar_modelo(destino: &std::path::Path, progresso: impl Fn(u32)) -> Result<(
     }
     let cliente = reqwest::blocking::Client::builder()
         .timeout(None) // download longo; sem timeout global
+        .user_agent("vinculo-app")
         .build()?;
-    let mut resposta = cliente.get(URL_MODELO).send()?.error_for_status()?;
+    let mut resposta = cliente.get(url).send()?.error_for_status()?;
     let total = resposta.content_length().unwrap_or(0);
 
     let temporario = destino.with_extension("part");
@@ -61,6 +62,74 @@ fn baixar_modelo(destino: &std::path::Path, progresso: impl Fn(u32)) -> Result<(
     drop(arquivo);
     std::fs::rename(&temporario, destino)?;
     Ok(())
+}
+
+fn baixar_modelo(destino: &std::path::Path, progresso: impl Fn(u32)) -> Result<()> {
+    baixar_arquivo(URL_MODELO, destino, progresso)
+}
+
+// ---------------------------------------------------------------------------
+// Atualização automática (GitHub Releases)
+// ---------------------------------------------------------------------------
+
+const URL_ULTIMA_RELEASE: &str =
+    "https://api.github.com/repos/lucaoskaique/vinculo/releases/latest";
+
+#[cfg(windows)]
+const ARTEFATO_ATUALIZACAO: &str = "vinculo-windows-x64.exe";
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const ARTEFATO_ATUALIZACAO: &str = "vinculo-macos-arm64";
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const ARTEFATO_ATUALIZACAO: &str = "vinculo-macos-x64";
+#[cfg(target_os = "linux")]
+const ARTEFATO_ATUALIZACAO: &str = "vinculo-linux-x64";
+
+#[derive(serde::Deserialize)]
+struct ReleaseGh {
+    tag_name: String,
+    assets: Vec<AssetGh>,
+}
+
+#[derive(serde::Deserialize)]
+struct AssetGh {
+    name: String,
+    browser_download_url: String,
+}
+
+/// "v1.2.3" → (1, 2, 3); partes ausentes/inválidas viram 0.
+fn versao_tripla(v: &str) -> (u64, u64, u64) {
+    let mut partes = v
+        .trim()
+        .trim_start_matches('v')
+        .split('.')
+        .map(|p| p.parse::<u64>().unwrap_or(0));
+    (
+        partes.next().unwrap_or(0),
+        partes.next().unwrap_or(0),
+        partes.next().unwrap_or(0),
+    )
+}
+
+/// `Some((versao, url))` quando a release mais recente no GitHub é mais nova
+/// que este binário e tem artefato para a plataforma atual.
+fn verificar_atualizacao() -> Result<Option<(String, String)>> {
+    let cliente = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent("vinculo-app")
+        .build()?;
+    let release: ReleaseGh = cliente
+        .get(URL_ULTIMA_RELEASE)
+        .send()?
+        .error_for_status()?
+        .json()?;
+    if versao_tripla(&release.tag_name) <= versao_tripla(env!("CARGO_PKG_VERSION")) {
+        return Ok(None);
+    }
+    Ok(release
+        .assets
+        .iter()
+        .find(|a| a.name == ARTEFATO_ATUALIZACAO)
+        .map(|a| (release.tag_name.clone(), a.browser_download_url.clone())))
 }
 
 struct Estado {
@@ -1158,4 +1227,81 @@ fn configurar_app(ui: &MainWindow, db: Rc<Db>) {
     });
 
     ui.on_mascarar(|tipo, texto| aplicar_mascara(tipo.as_str(), texto.as_str()).into());
+
+    // ---------- atualizações ----------
+    ui.set_atualizacao_status(format!("Você está na versão {}.", env!("CARGO_PKG_VERSION")).into());
+    {
+        let ui_bg = ui.as_weak();
+        std::thread::spawn(move || {
+            let resultado = verificar_atualizacao();
+            let _ = ui_bg.upgrade_in_event_loop(move |ui| match resultado {
+                Ok(Some((versao, url))) => {
+                    ui.set_atualizacao_url(url.into());
+                    ui.set_atualizacao_disponivel(true);
+                    ui.set_atualizacao_status(
+                        format!(
+                            "Nova versão {versao} disponível — você está na {}.",
+                            env!("CARGO_PKG_VERSION")
+                        )
+                        .into(),
+                    );
+                }
+                Ok(None) => ui.set_atualizacao_status(
+                    format!(
+                        "Você está na versão mais recente ({}).",
+                        env!("CARGO_PKG_VERSION")
+                    )
+                    .into(),
+                ),
+                // Offline ou API indisponível: silêncio, tenta de novo na próxima abertura.
+                Err(_) => {}
+            });
+        });
+    }
+
+    ui.on_atualizar_app({
+        let ui_weak = ui.as_weak();
+        move || {
+            let ui = ui_weak.unwrap();
+            let url = ui.get_atualizacao_url().to_string();
+            if url.is_empty() {
+                return;
+            }
+            ui.set_ocupado(true);
+            ui.set_atualizacao_status("Baixando a atualização…".into());
+            let ui_bg = ui.as_weak();
+            std::thread::spawn(move || {
+                let ui_progresso = ui_bg.clone();
+                let destino = std::env::temp_dir().join("vinculo-atualizacao.novo");
+                let resultado = baixar_arquivo(&url, &destino, move |pct| {
+                    let _ = ui_progresso.upgrade_in_event_loop(move |ui| {
+                        ui.set_atualizacao_status(format!("Baixando a atualização… {pct}%").into());
+                    });
+                })
+                .and_then(|()| {
+                    self_replace::self_replace(&destino)
+                        .map_err(|e| anyhow::anyhow!("falha ao substituir o executável: {e}"))
+                });
+                match resultado {
+                    Ok(()) => {
+                        let _ = std::fs::remove_file(&destino);
+                        // Reinicia já na versão nova.
+                        if let Ok(exe) = std::env::current_exe() {
+                            let _ = std::process::Command::new(exe).spawn();
+                        }
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        let _ = ui_bg.upgrade_in_event_loop(move |ui| {
+                            ui.set_ocupado(false);
+                            ui.set_atualizacao_status(
+                                format!("Falha na atualização: {e}. Tente novamente ou baixe manualmente no GitHub.")
+                                    .into(),
+                            );
+                        });
+                    }
+                }
+            });
+        }
+    });
 }

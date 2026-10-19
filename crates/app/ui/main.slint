@@ -225,6 +225,10 @@ export component MainWindow inherits Window {
     in-out property <string> cfg-workspace;
     in-out property <string> cfg-status-ia;
     in-out property <string> cfg-status;
+    // Atualizações
+    in-out property <bool> atualizacao-disponivel: false;
+    in-out property <string> atualizacao-status;
+    in-out property <string> atualizacao-url;
 
     // Tela de bloqueio (criptografia do banco)
     in-out property <string> trava-senha;
@@ -257,6 +261,7 @@ export component MainWindow inherits Window {
     callback salvar-perfil(string, string, string, string); // nome, crp, email, telefone
     callback salvar-chave-ia(string);
     callback salvar-workspace-ia(string);
+    callback atualizar-app();
     // Máscaras de digitação (implementadas no Rust): tipo + texto → texto formatado.
     callback mascarar(string, string) -> string;
     callback exportar-evolucao(int);        // id da evolução (prontuário)
@@ -307,6 +312,11 @@ export component MainWindow inherits Window {
                 NavItem { rotulo: "Prontuário"; ativo: tela == 2; clicado => { tela = 2; root.tela-mudou(2); } }
                 NavItem { rotulo: "Financeiro"; ativo: tela == 3; clicado => { tela = 3; root.tela-mudou(3); } }
                 Rectangle { }
+                if atualizacao-disponivel : NavItem {
+                    rotulo: "⬆ Atualização disponível";
+                    ativo: false;
+                    clicado => { tela = 5; root.tela-mudou(5); }
+                }
                 NavItem { rotulo: "Configurações"; ativo: tela == 5; clicado => { tela = 5; root.tela-mudou(5); } }
 
                 Text {
@@ -719,6 +729,30 @@ export component MainWindow inherits Window {
                             font-size: 12px;
                             color: #6e6e73;
                             wrap: word-wrap;
+                        }
+                    }
+                }
+
+                Cartao {
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 10px;
+
+                        Rotulo { text: "ATUALIZAÇÕES"; }
+                        Secundario { text: atualizacao-status; wrap: word-wrap; }
+                        if atualizacao-disponivel : HorizontalLayout {
+                            spacing: 8px;
+                            Botao {
+                                texto: "Atualizar agora";
+                                primario: true;
+                                enabled: !ocupado;
+                                clicado => { root.atualizar-app(); }
+                            }
+                            Secundario {
+                                text: "O app baixa a nova versão e reinicia sozinho.";
+                                vertical-alignment: center;
+                            }
+                            Rectangle { }
                         }
                     }
                 }
