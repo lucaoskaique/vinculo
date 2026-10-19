@@ -11,7 +11,7 @@ whisper = ["dep:whisper-rs"]
 
 [dependencies]
 anyhow.workspace = true
-cpal = "0.15"
+cpal = "0.17"
 hound = "3.5"
 rodio = { version = "0.19", default-features = false, features = ["wav"] }
 whisper-rs = { version = "0.16", optional = true }
