@@ -49,8 +49,8 @@ fn baixar_modelo(destino: &std::path::Path, progresso: impl Fn(u32)) -> Result<(
         }
         arquivo.write_all(&buffer[..n])?;
         lido += n as u64;
-        if total > 0 {
-            let pct = ((lido * 100) / total) as u32;
+        if let Some(pct) = (lido * 100).checked_div(total) {
+            let pct = pct as u32;
             if pct != ultimo_pct {
                 ultimo_pct = pct;
                 progresso(pct);
