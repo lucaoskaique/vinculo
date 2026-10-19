@@ -1,11 +1,13 @@
-//! Persistência local do Vínculo (SQLite).
+//! Persistência local do Vínculo (SQLite + SQLCipher).
 //!
-//! v1 usa SQLite puro; a migração para SQLCipher (banco criptografado em
-//! repouso) está planejada antes de guardar qualquer dado clínico real.
+//! O banco de produção é criptografado em repouso via SQLCipher
+//! ([`Db::abrir_cifrado`]); a chave é derivada da senha do profissional pelo
+//! próprio SQLCipher (PBKDF2). [`Db::open`] abre sem criptografia e existe
+//! para testes e para detectar/migrar bancos legados em texto plano.
 
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use chrono::{Local, NaiveDate, NaiveDateTime};
 use rusqlite::{params, Connection, OptionalExtension};
 use vinculo_core::{Evolucao, Paciente, Sessao, StatusSessao};
@@ -17,6 +19,7 @@ pub struct Db {
 }
 
 impl Db {
+    /// Abre sem criptografia (testes e bancos legados).
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -26,6 +29,85 @@ impl Db {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(SCHEMA)?;
         Ok(Self { conn })
+    }
+
+    /// Abre (ou cria) o banco criptografado com a senha do profissional.
+    /// Senha incorreta resulta em `Err`.
+    pub fn abrir_cifrado(path: &Path, senha: &str) -> Result<Self> {
+        if senha.is_empty() {
+            anyhow::bail!("a senha não pode ser vazia");
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let conn = Connection::open(path)?;
+        conn.pragma_update(None, "key", senha)
+            .context("falha ao aplicar a chave de criptografia")?;
+        // Com a chave errada, a primeira leitura falha ("file is not a database").
+        let valido: std::result::Result<i64, _> =
+            conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get(0));
+        if valido.is_err() {
+            anyhow::bail!("Senha incorreta.");
+        }
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.execute_batch(SCHEMA)?;
+        Ok(Self { conn })
+    }
+
+    /// `true` quando o arquivo existe e abre sem senha (banco legado em texto plano).
+    pub fn banco_em_texto_plano(path: &Path) -> bool {
+        if !path.exists() {
+            return false;
+        }
+        Connection::open(path)
+            .and_then(|c| {
+                c.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+                    r.get::<_, i64>(0)
+                })
+            })
+            .is_ok()
+    }
+
+    /// Migra um banco em texto plano para o formato criptografado com `senha`,
+    /// substituindo o arquivo original. O conteúdo é exportado para um arquivo
+    /// temporário cifrado, validado, e só então colocado no lugar do antigo —
+    /// que é removido (inclusive os arquivos -wal/-shm).
+    pub fn cifrar_banco_existente(path: &Path, senha: &str) -> Result<()> {
+        if senha.is_empty() {
+            anyhow::bail!("a senha não pode ser vazia");
+        }
+        let temporario = path.with_extension("db.cifrando");
+        let _ = std::fs::remove_file(&temporario);
+
+        {
+            let conn = Connection::open(path).context("falha ao abrir o banco atual")?;
+            // Consolida o WAL no arquivo principal antes de exportar.
+            let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_r| {
+                Ok::<_, rusqlite::Error>(())
+            });
+            conn.execute(
+                "ATTACH DATABASE ?1 AS cifrado KEY ?2",
+                params![temporario.to_string_lossy(), senha],
+            )
+            .context("falha ao criar o banco cifrado temporário")?;
+            conn.query_row("SELECT sqlcipher_export('cifrado')", [], |_r| {
+                Ok::<_, rusqlite::Error>(())
+            })
+            .context("falha ao exportar os dados para o banco cifrado")?;
+            conn.execute("DETACH DATABASE cifrado", [])?;
+        }
+
+        // Valida o arquivo cifrado antes de descartar o original.
+        Db::abrir_cifrado(&temporario, senha)
+            .map_err(|e| anyhow!("validação do banco cifrado falhou: {e}"))?;
+
+        std::fs::remove_file(path).context("falha ao remover o banco antigo")?;
+        std::fs::rename(&temporario, path).context("falha ao ativar o banco cifrado")?;
+        for sufixo in ["db-wal", "db-shm"] {
+            let _ = std::fs::remove_file(path.with_extension(sufixo));
+        }
+        Ok(())
     }
 
     pub fn inserir_paciente(
@@ -337,5 +419,56 @@ impl Db {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    fn caminho_tmp(nome: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("vinculo-testes-cripto");
+        let _ = std::fs::create_dir_all(&dir);
+        let caminho = dir.join(nome);
+        let _ = std::fs::remove_file(&caminho);
+        for sufixo in ["db-wal", "db-shm"] {
+            let _ = std::fs::remove_file(caminho.with_extension(sufixo));
+        }
+        caminho
+    }
+
+    #[test]
+    fn cifra_banco_legado_e_exige_senha() {
+        let caminho = caminho_tmp("migracao.db");
+
+        // Banco legado em texto plano com um paciente.
+        {
+            let db = Db::open(&caminho).unwrap();
+            db.inserir_paciente("Teste da Silva", None, None).unwrap();
+        }
+        assert!(Db::banco_em_texto_plano(&caminho));
+
+        // Migra para cifrado.
+        Db::cifrar_banco_existente(&caminho, "senha-forte").unwrap();
+        assert!(!Db::banco_em_texto_plano(&caminho));
+
+        // Senha errada falha; senha certa lê os dados migrados.
+        assert!(Db::abrir_cifrado(&caminho, "senha-errada").is_err());
+        let db = Db::abrir_cifrado(&caminho, "senha-forte").unwrap();
+        let pacientes = db.listar_pacientes().unwrap();
+        assert_eq!(pacientes.len(), 1);
+        assert_eq!(pacientes[0].nome, "Teste da Silva");
+    }
+
+    #[test]
+    fn banco_novo_cifrado() {
+        let caminho = caminho_tmp("novo.db");
+        {
+            let db = Db::abrir_cifrado(&caminho, "outra-senha").unwrap();
+            db.inserir_paciente("Nova Pessoa", None, None).unwrap();
+        }
+        assert!(!Db::banco_em_texto_plano(&caminho));
+        let db = Db::abrir_cifrado(&caminho, "outra-senha").unwrap();
+        assert_eq!(db.listar_pacientes().unwrap().len(), 1);
     }
 }
