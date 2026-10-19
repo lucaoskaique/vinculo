@@ -336,7 +336,6 @@ fn recarregar_prontuario(ui: &MainWindow, db: &Db, paciente_id: i64) {
 
 fn main() -> Result<()> {
     let ui = MainWindow::new()?;
-    ui.window().set_maximized(true);
     let caminho_db = dir_dados().join("vinculo.db");
     let em_texto_plano = Db::banco_em_texto_plano(&caminho_db);
     let modo_criacao = !caminho_db.exists() || em_texto_plano;
@@ -380,7 +379,29 @@ fn main() -> Result<()> {
         }
     });
 
-    ui.run()?;
+    // Maximizar direto no show() é atropelado pelo dimensionamento inicial do
+    // backend; reafirmamos num timer de disparo único já dentro do loop.
+    ui.show()?;
+    ui.window().set_maximized(true);
+    let maximizador = slint::Timer::default();
+    maximizador.start(
+        slint::TimerMode::SingleShot,
+        std::time::Duration::from_millis(150),
+        {
+            let ui_weak = ui.as_weak();
+            move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    // O backend às vezes marca a janela como maximizada com o
+                    // tamanho errado; o toggle força o Windows a recalcular o
+                    // retângulo (equivalente a restaurar e maximizar de novo).
+                    ui.window().set_maximized(false);
+                    ui.window().set_maximized(true);
+                }
+            }
+        },
+    );
+    slint::run_event_loop()?;
+    drop(maximizador);
     Ok(())
 }
 
