@@ -216,6 +216,7 @@ export component MainWindow inherits Window {
     in-out property <string> cfg-crp;
     in-out property <string> cfg-email;
     in-out property <string> cfg-telefone;
+    in-out property <string> cfg-workspace;
     in-out property <string> cfg-status-ia;
     in-out property <string> cfg-status;
 
@@ -238,6 +239,9 @@ export component MainWindow inherits Window {
     callback marcar-realizada();
     callback salvar-perfil(string, string, string, string); // nome, crp, email, telefone
     callback salvar-chave-ia(string);
+    callback salvar-workspace-ia(string);
+    // Máscaras de digitação (implementadas no Rust): tipo + texto → texto formatado.
+    callback mascarar(string, string) -> string;
     callback exportar-evolucao(int);        // id da evolução (prontuário)
     callback exportar-rascunho(string);     // texto atual do editor (sessão)
     // Invocados pelo Rust quando tarefas em background terminam.
@@ -324,8 +328,16 @@ export component MainWindow inherits Window {
                         padding: 12px;
                         spacing: 8px;
                         cb-pac := ComboBox { model: nomes-pacientes; horizontal-stretch: 1; }
-                        le-hora := LineEdit { placeholder-text: "HH:MM"; width: 90px; }
-                        le-valor := LineEdit { placeholder-text: "Valor R$"; width: 100px; }
+                        le-hora := LineEdit {
+                            placeholder-text: "HH:MM";
+                            width: 90px;
+                            edited(t) => { self.text = root.mascarar("hora", t); }
+                        }
+                        le-valor := LineEdit {
+                            placeholder-text: "Valor R$";
+                            width: 100px;
+                            edited(t) => { self.text = root.mascarar("valor", t); }
+                        }
                         Botao {
                             texto: "Nova sessão";
                             primario: true;
@@ -386,8 +398,16 @@ export component MainWindow inherits Window {
                         padding: 12px;
                         spacing: 8px;
                         le-nome := LineEdit { placeholder-text: "Nome completo"; horizontal-stretch: 1; }
-                        le-tel := LineEdit { placeholder-text: "Telefone"; width: 150px; }
-                        le-email := LineEdit { placeholder-text: "E-mail"; width: 200px; }
+                        le-tel := LineEdit {
+                            placeholder-text: "Telefone";
+                            width: 150px;
+                            edited(t) => { self.text = root.mascarar("telefone", t); }
+                        }
+                        le-email := LineEdit {
+                            placeholder-text: "E-mail";
+                            width: 200px;
+                            edited(t) => { self.text = root.mascarar("email", t); }
+                        }
                         Botao {
                             texto: "Adicionar";
                             primario: true;
@@ -567,12 +587,22 @@ export component MainWindow inherits Window {
                         HorizontalLayout {
                             spacing: 8px;
                             Rotulo { text: "E-mail:"; vertical-alignment: center; width: 110px; }
-                            LineEdit { text <=> cfg-email; placeholder-text: "voce@exemplo.com"; horizontal-stretch: 1; }
+                            LineEdit {
+                                text <=> cfg-email;
+                                placeholder-text: "voce@exemplo.com";
+                                horizontal-stretch: 1;
+                                edited(t) => { self.text = root.mascarar("email", t); }
+                            }
                         }
                         HorizontalLayout {
                             spacing: 8px;
                             Rotulo { text: "Telefone:"; vertical-alignment: center; width: 110px; }
-                            LineEdit { text <=> cfg-telefone; placeholder-text: "(21) 99999-9999"; horizontal-stretch: 1; }
+                            LineEdit {
+                                text <=> cfg-telefone;
+                                placeholder-text: "(21) 99999-9999";
+                                horizontal-stretch: 1;
+                                edited(t) => { self.text = root.mascarar("telefone", t); }
+                            }
                         }
 
                         HorizontalLayout {
@@ -613,8 +643,22 @@ export component MainWindow inherits Window {
                             }
                         }
 
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Rotulo { text: "Workspace ID:"; vertical-alignment: center; width: 110px; }
+                            le-workspace := LineEdit {
+                                text <=> cfg-workspace;
+                                placeholder-text: "Opcional — só se a sua chave exigir (wrkspc_…)";
+                                horizontal-stretch: 1;
+                            }
+                            Botao {
+                                texto: "Salvar";
+                                clicado => { root.salvar-workspace-ia(le-workspace.text); }
+                            }
+                        }
+
                         Text {
-                            text: "A chave é usada apenas para gerar rascunhos de evolução e fica guardada neste computador. As transcrições são anonimizadas antes de qualquer envio. Se a variável de ambiente ANTHROPIC_API_KEY estiver definida, ela tem prioridade sobre a chave salva aqui.";
+                            text: "A chave é usada apenas para gerar rascunhos de evolução e fica guardada neste computador. As transcrições são anonimizadas antes de qualquer envio. Se a variável de ambiente ANTHROPIC_API_KEY estiver definida, ela tem prioridade sobre a chave salva aqui. O Workspace ID só é necessário quando a Claude API pedir (chaves de organização).";
                             font-size: 12px;
                             color: #6e6e73;
                             wrap: word-wrap;
