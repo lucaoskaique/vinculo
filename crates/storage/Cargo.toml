@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 vinculo-core = { path = "../core" }
-rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+# bundled-sqlcipher-vendored-openssl: SQLite com criptografia SQLCipher,
+# compilando o OpenSSL junto (exige cmake, perl e nasm no build).
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl", "chrono"] }
 chrono.workspace = true
 anyhow.workspace = true
