@@ -336,6 +336,7 @@ fn recarregar_prontuario(ui: &MainWindow, db: &Db, paciente_id: i64) {
 
 fn main() -> Result<()> {
     let ui = MainWindow::new()?;
+    ui.window().set_maximized(true);
     let caminho_db = dir_dados().join("vinculo.db");
     let em_texto_plano = Db::banco_em_texto_plano(&caminho_db);
     let modo_criacao = !caminho_db.exists() || em_texto_plano;
