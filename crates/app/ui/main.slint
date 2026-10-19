@@ -203,6 +203,7 @@ export component MainWindow inherits Window {
     in-out property <bool> gravando: false;
     in-out property <bool> ocupado: false;
     in-out property <bool> tem-audio: false;
+    in-out property <bool> precisa-modelo: false;
     in-out property <bool> reproduzindo: false;
     in-out property <string> duracao-audio;
     in-out property <[float]> forma-onda;
@@ -233,6 +234,7 @@ export component MainWindow inherits Window {
     callback alternar-gravacao(int, int, int); // fonte, microfone, saída
     callback alternar-reproducao();
     callback apagar-gravacao();
+    callback baixar-modelo();
     callback transcrever();
     callback gerar-rascunho();
     callback salvar-evolucao(string);
@@ -771,6 +773,23 @@ export component MainWindow inherits Window {
                                 clicado => { root.gerar-rascunho(); }
                             }
                             Rectangle { }
+                        }
+
+                        // Instalação única do modelo de transcrição.
+                        if precisa-modelo : HorizontalLayout {
+                            spacing: 10px;
+                            Botao {
+                                texto: "⬇ Instalar transcrição (download de 142 MB)";
+                                primario: true;
+                                enabled: !ocupado;
+                                clicado => { root.baixar-modelo(); }
+                            }
+                            Secundario {
+                                text: "Uma única vez. Depois, a transcrição funciona offline, sem o áudio sair do computador.";
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                                horizontal-stretch: 1;
+                            }
                         }
 
                         // Conferência da gravação: forma de onda + ouvir/apagar.

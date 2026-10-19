@@ -5952,6 +5952,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "open",
+ "reqwest",
  "slint",
  "slint-build",
  "vinculo-ai",
