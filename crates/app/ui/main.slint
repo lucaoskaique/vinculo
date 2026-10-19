@@ -334,18 +334,27 @@ export component MainWindow inherits Window {
                         le-hora := LineEdit {
                             placeholder-text: "HH:MM";
                             width: 90px;
-                            edited(t) => { self.text = root.mascarar("hora", t); }
+                            accepted => { self.text = root.mascarar("hora", self.text); }
+                            changed has-focus => {
+                                if (!self.has-focus) { self.text = root.mascarar("hora", self.text); }
+                            }
                         }
                         le-valor := LineEdit {
                             placeholder-text: "Valor R$";
                             width: 100px;
-                            edited(t) => { self.text = root.mascarar("valor", t); }
+                            accepted => { self.text = root.mascarar("valor", self.text); }
+                            changed has-focus => {
+                                if (!self.has-focus) { self.text = root.mascarar("valor", self.text); }
+                            }
                         }
                         Botao {
                             texto: "Nova sessão";
                             primario: true;
                             clicado => {
-                                root.criar-sessao(cb-pac.current-index, le-hora.text, le-valor.text);
+                                root.criar-sessao(
+                                    cb-pac.current-index,
+                                    root.mascarar("hora", le-hora.text),
+                                    root.mascarar("valor", le-valor.text));
                                 le-hora.text = "";
                                 le-valor.text = "";
                             }
@@ -404,18 +413,27 @@ export component MainWindow inherits Window {
                         le-tel := LineEdit {
                             placeholder-text: "Telefone";
                             width: 150px;
-                            edited(t) => { self.text = root.mascarar("telefone", t); }
+                            accepted => { self.text = root.mascarar("telefone", self.text); }
+                            changed has-focus => {
+                                if (!self.has-focus) { self.text = root.mascarar("telefone", self.text); }
+                            }
                         }
                         le-email := LineEdit {
                             placeholder-text: "E-mail";
                             width: 200px;
-                            edited(t) => { self.text = root.mascarar("email", t); }
+                            accepted => { self.text = root.mascarar("email", self.text); }
+                            changed has-focus => {
+                                if (!self.has-focus) { self.text = root.mascarar("email", self.text); }
+                            }
                         }
                         Botao {
                             texto: "Adicionar";
                             primario: true;
                             clicado => {
-                                root.adicionar-paciente(le-nome.text, le-tel.text, le-email.text);
+                                root.adicionar-paciente(
+                                    le-nome.text,
+                                    root.mascarar("telefone", le-tel.text),
+                                    root.mascarar("email", le-email.text));
                                 le-nome.text = "";
                                 le-tel.text = "";
                                 le-email.text = "";
@@ -594,7 +612,10 @@ export component MainWindow inherits Window {
                                 text <=> cfg-email;
                                 placeholder-text: "voce@exemplo.com";
                                 horizontal-stretch: 1;
-                                edited(t) => { self.text = root.mascarar("email", t); }
+                                accepted => { self.text = root.mascarar("email", self.text); }
+                            changed has-focus => {
+                                if (!self.has-focus) { self.text = root.mascarar("email", self.text); }
+                            }
                             }
                         }
                         HorizontalLayout {
@@ -604,7 +625,10 @@ export component MainWindow inherits Window {
                                 text <=> cfg-telefone;
                                 placeholder-text: "(21) 99999-9999";
                                 horizontal-stretch: 1;
-                                edited(t) => { self.text = root.mascarar("telefone", t); }
+                                accepted => { self.text = root.mascarar("telefone", self.text); }
+                            changed has-focus => {
+                                if (!self.has-focus) { self.text = root.mascarar("telefone", self.text); }
+                            }
                             }
                         }
 
@@ -613,7 +637,13 @@ export component MainWindow inherits Window {
                             Botao {
                                 texto: "Salvar dados";
                                 primario: true;
-                                clicado => { root.salvar-perfil(cfg-nome, cfg-crp, cfg-email, cfg-telefone); }
+                                clicado => {
+                                    root.salvar-perfil(
+                                        cfg-nome,
+                                        cfg-crp,
+                                        root.mascarar("email", cfg-email),
+                                        root.mascarar("telefone", cfg-telefone));
+                                }
                             }
                         }
                     }
