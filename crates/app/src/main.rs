@@ -16,6 +16,53 @@ fn dir_dados() -> PathBuf {
     vinculo_core::dir_dados()
 }
 
+const URL_MODELO: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin";
+
+fn caminho_modelo() -> PathBuf {
+    dir_dados().join("models").join("ggml-base.bin")
+}
+
+/// Baixa o modelo de transcrição para `destino`, reportando o progresso (0–100).
+/// Grava num arquivo .part e renomeia ao final, para nunca deixar um modelo
+/// corrompido no caminho definitivo.
+fn baixar_modelo(destino: &std::path::Path, progresso: impl Fn(u32)) -> Result<()> {
+    use std::io::{Read, Write};
+
+    if let Some(pai) = destino.parent() {
+        std::fs::create_dir_all(pai)?;
+    }
+    let cliente = reqwest::blocking::Client::builder()
+        .timeout(None) // download longo; sem timeout global
+        .build()?;
+    let mut resposta = cliente.get(URL_MODELO).send()?.error_for_status()?;
+    let total = resposta.content_length().unwrap_or(0);
+
+    let temporario = destino.with_extension("part");
+    let mut arquivo = std::fs::File::create(&temporario)?;
+    let mut buffer = [0u8; 64 * 1024];
+    let mut lido: u64 = 0;
+    let mut ultimo_pct = 0u32;
+    loop {
+        let n = resposta.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        arquivo.write_all(&buffer[..n])?;
+        lido += n as u64;
+        if let Some(pct) = (lido * 100).checked_div(total) {
+            let pct = pct as u32;
+            if pct != ultimo_pct {
+                ultimo_pct = pct;
+                progresso(pct);
+            }
+        }
+    }
+    arquivo.flush()?;
+    drop(arquivo);
+    std::fs::rename(&temporario, destino)?;
+    Ok(())
+}
+
 struct Estado {
     dia: NaiveDate,
     ano: i32,
@@ -400,6 +447,7 @@ fn main() -> Result<()> {
             ui.set_reproduzindo(false);
             let duracao = atualizar_info_audio(&ui, &db, id);
             estado.borrow_mut().duracao_audio_s = duracao.unwrap_or(0.0);
+            ui.set_precisa_modelo(!caminho_modelo().exists());
             // Dispositivos de áudio disponíveis (índice 0 = padrão do Windows).
             let entradas = vinculo_audio::listar_entradas();
             let saidas = vinculo_audio::listar_saidas();
@@ -606,6 +654,44 @@ fn main() -> Result<()> {
         },
     );
 
+    // ---------- download do modelo de transcrição ----------
+    ui.on_baixar_modelo({
+        let ui_weak = ui.as_weak();
+        move || {
+            let ui = ui_weak.unwrap();
+            ui.set_ocupado(true);
+            ui.set_status_nota("Baixando o modelo de transcrição…".into());
+            let destino = caminho_modelo();
+            let ui_bg = ui.as_weak();
+            std::thread::spawn(move || {
+                let ui_progresso = ui_bg.clone();
+                let resultado = baixar_modelo(&destino, move |pct| {
+                    let _ = ui_progresso.upgrade_in_event_loop(move |ui| {
+                        ui.set_status_nota(
+                            format!("Baixando o modelo de transcrição… {pct}%").into(),
+                        );
+                    });
+                });
+                let _ = ui_bg.upgrade_in_event_loop(move |ui| {
+                    ui.set_ocupado(false);
+                    match resultado {
+                        Ok(()) => {
+                            ui.set_precisa_modelo(false);
+                            ui.set_status_nota(
+                                "Transcrição instalada! Clique em \"Transcrever (local)\"."
+                                    .into(),
+                            );
+                        }
+                        Err(e) => ui.set_status_nota(
+                            format!("Falha no download do modelo: {e}. Verifique a internet e tente novamente.")
+                                .into(),
+                        ),
+                    }
+                });
+            });
+        }
+    });
+
     // ---------- apagar gravação ----------
     ui.on_apagar_gravacao({
         let ui_weak = ui.as_weak();
@@ -658,15 +744,13 @@ fn main() -> Result<()> {
                 ui.set_status_nota("Nenhum áudio gravado para esta sessão.".into());
                 return;
             };
-            let modelo = dir_dados().join("models").join("ggml-base.bin");
+            let modelo = caminho_modelo();
             if !modelo.exists() {
+                ui.set_precisa_modelo(true);
                 ui.set_status_nota(
-                    format!(
-                        "Modelo Whisper não encontrado. Baixe ggml-base.bin em \
-                         https://huggingface.co/ggerganov/whisper.cpp e salve em: {}",
-                        modelo.display()
-                    )
-                    .into(),
+                    "A transcrição ainda não está instalada neste computador — \
+                     clique no botão azul abaixo para instalar (uma única vez)."
+                        .into(),
                 );
                 return;
             }
