@@ -425,9 +425,9 @@ fn configurar_app(ui: &MainWindow, db: Rc<Db>) {
         dispositivos_saida: Vec::new(),
     }));
 
-    recarregar_agenda(&ui, &db, hoje);
-    estado.borrow_mut().paciente_ids = recarregar_pacientes(&ui, &db);
-    recarregar_financeiro(&ui, &db, hoje.year(), hoje.month());
+    recarregar_agenda(ui, &db, hoje);
+    estado.borrow_mut().paciente_ids = recarregar_pacientes(ui, &db);
+    recarregar_financeiro(ui, &db, hoje.year(), hoje.month());
 
     // ---------- navegação ----------
     ui.on_tela_mudou({
