@@ -335,10 +335,79 @@ fn recarregar_prontuario(ui: &MainWindow, db: &Db, paciente_id: i64) {
 }
 
 fn main() -> Result<()> {
-    let db = Rc::new(Db::open(&dir_dados().join("vinculo.db"))?);
-    db.semear_exemplo()?;
-
     let ui = MainWindow::new()?;
+    let caminho_db = dir_dados().join("vinculo.db");
+    let em_texto_plano = Db::banco_em_texto_plano(&caminho_db);
+    let modo_criacao = !caminho_db.exists() || em_texto_plano;
+    ui.set_trava_migracao(em_texto_plano);
+    ui.set_trava_modo_criacao(modo_criacao);
+
+    ui.on_desbloquear({
+        let ui_weak = ui.as_weak();
+        move |senha, confirmacao| {
+            let ui = ui_weak.unwrap();
+            let senha = senha.to_string();
+            if modo_criacao {
+                if senha.chars().count() < 6 {
+                    ui.set_trava_status("A senha precisa ter pelo menos 6 caracteres.".into());
+                    return;
+                }
+                if senha != confirmacao.as_str() {
+                    ui.set_trava_status("As senhas não conferem.".into());
+                    return;
+                }
+                if em_texto_plano {
+                    ui.set_trava_status("Criptografando o banco existente…".into());
+                    if let Err(e) = Db::cifrar_banco_existente(&caminho_db, &senha) {
+                        ui.set_trava_status(format!("Falha ao criptografar: {e}").into());
+                        return;
+                    }
+                }
+            }
+            match Db::abrir_cifrado(&caminho_db, &senha) {
+                Ok(db) => {
+                    let db = Rc::new(db);
+                    let _ = db.semear_exemplo();
+                    configurar_app(&ui, db);
+                    ui.set_trava_senha("".into());
+                    ui.set_trava_confirma("".into());
+                    ui.set_trava_status("".into());
+                    ui.set_tela(0);
+                }
+                Err(e) => ui.set_trava_status(format!("{e}").into()),
+            }
+        }
+    });
+
+    // Maximizar direto no show() é atropelado pelo dimensionamento inicial do
+    // backend; reafirmamos num timer de disparo único já dentro do loop.
+    ui.show()?;
+    ui.window().set_maximized(true);
+    let maximizador = slint::Timer::default();
+    maximizador.start(
+        slint::TimerMode::SingleShot,
+        std::time::Duration::from_millis(150),
+        {
+            let ui_weak = ui.as_weak();
+            move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    // O backend às vezes marca a janela como maximizada com o
+                    // tamanho errado; o toggle força o Windows a recalcular o
+                    // retângulo (equivalente a restaurar e maximizar de novo).
+                    ui.window().set_maximized(false);
+                    ui.window().set_maximized(true);
+                }
+            }
+        },
+    );
+    slint::run_event_loop()?;
+    drop(maximizador);
+    Ok(())
+}
+
+/// Registra todos os callbacks e carrega os dados iniciais.
+/// Só é chamado após o desbloqueio do banco criptografado.
+fn configurar_app(ui: &MainWindow, db: Rc<Db>) {
     let hoje = Local::now().date_naive();
     let estado = Rc::new(RefCell::new(Estado {
         dia: hoje,
@@ -356,9 +425,9 @@ fn main() -> Result<()> {
         dispositivos_saida: Vec::new(),
     }));
 
-    recarregar_agenda(&ui, &db, hoje);
-    estado.borrow_mut().paciente_ids = recarregar_pacientes(&ui, &db);
-    recarregar_financeiro(&ui, &db, hoje.year(), hoje.month());
+    recarregar_agenda(ui, &db, hoje);
+    estado.borrow_mut().paciente_ids = recarregar_pacientes(ui, &db);
+    recarregar_financeiro(ui, &db, hoje.year(), hoje.month());
 
     // ---------- navegação ----------
     ui.on_tela_mudou({
@@ -770,6 +839,8 @@ fn main() -> Result<()> {
             }
         },
     );
+    // O timer precisa sobreviver ao retorno desta função (dropá-lo o pararia).
+    std::mem::forget(temporizador_player);
 
     // ---------- download do modelo de transcrição ----------
     ui.on_baixar_modelo({
@@ -1087,7 +1158,4 @@ fn main() -> Result<()> {
     });
 
     ui.on_mascarar(|tipo, texto| aplicar_mascara(tipo.as_str(), texto.as_str()).into());
-
-    ui.run()?;
-    Ok(())
 }

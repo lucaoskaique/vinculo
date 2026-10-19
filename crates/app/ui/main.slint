@@ -226,9 +226,17 @@ export component MainWindow inherits Window {
     in-out property <string> cfg-status-ia;
     in-out property <string> cfg-status;
 
-    in-out property <int> tela: 0;
+    // Tela de bloqueio (criptografia do banco)
+    in-out property <string> trava-senha;
+    in-out property <string> trava-confirma;
+    in-out property <string> trava-status;
+    in-out property <bool> trava-modo-criacao: false;
+    in-out property <bool> trava-migracao: false;
+
+    in-out property <int> tela: 9;
 
     callback tela-mudou(int);
+    callback desbloquear(string, string); // senha, confirmação
     callback mudar-dia(int);
     callback criar-sessao(int, string, string);
     callback abrir-sessao(int);
@@ -920,6 +928,81 @@ export component MainWindow inherits Window {
                         clicado => { root.salvar-evolucao(rascunho); }
                     }
                 }
+                }
+            }
+        }
+    }
+
+    // ---------------- Tela de bloqueio (cobre tudo; tela 9) ----------------
+    if tela == 9 : Rectangle {
+        background: #f5f5f7;
+
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                Cartao {
+                    width: 440px;
+                    VerticalLayout {
+                        padding: 32px;
+                        spacing: 12px;
+
+                        HorizontalLayout {
+                            alignment: center;
+                            Image {
+                                source: @image-url("../assets/icone-256.png");
+                                width: 72px;
+                                height: 72px;
+                            }
+                        }
+                        Text {
+                            text: "Vínculo";
+                            font-size: 24px;
+                            font-weight: 700;
+                            letter-spacing: -0.3px;
+                            color: #1d1d1f;
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            text: trava-modo-criacao
+                                ? (trava-migracao
+                                    ? "Crie uma senha para proteger seus dados. O banco atual será criptografado — sem a senha, ninguém abre o prontuário, nem você."
+                                    : "Crie a senha que protegerá seus dados neste computador. Sem ela, ninguém abre o prontuário — nem você.")
+                                : "Digite sua senha para desbloquear.";
+                            font-size: 13px;
+                            color: #6e6e73;
+                            wrap: word-wrap;
+                            horizontal-alignment: center;
+                        }
+
+                        LineEdit {
+                            text <=> trava-senha;
+                            input-type: InputType.password;
+                            placeholder-text: "Senha";
+                            accepted => { root.desbloquear(trava-senha, trava-confirma); }
+                        }
+                        if trava-modo-criacao : LineEdit {
+                            text <=> trava-confirma;
+                            input-type: InputType.password;
+                            placeholder-text: "Confirme a senha";
+                            accepted => { root.desbloquear(trava-senha, trava-confirma); }
+                        }
+
+                        Botao {
+                            texto: trava-modo-criacao ? "Criar senha e entrar" : "Desbloquear";
+                            primario: true;
+                            enabled: trava-senha != "";
+                            clicado => { root.desbloquear(trava-senha, trava-confirma); }
+                        }
+
+                        Text {
+                            text: trava-status;
+                            font-size: 12.5px;
+                            color: #c23b22;
+                            wrap: word-wrap;
+                            horizontal-alignment: center;
+                        }
+                    }
                 }
             }
         }
