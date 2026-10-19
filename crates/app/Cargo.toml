@@ -17,3 +17,6 @@ reqwest = { version = "0.12", features = ["blocking"] }
 
 [build-dependencies]
 slint-build = "1"
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
