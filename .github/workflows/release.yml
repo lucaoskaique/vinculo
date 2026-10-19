@@ -23,8 +23,11 @@ jobs:
             alvo: macos-arm64
             binario: vinculo
             artefato: vinculo-macos-arm64
-          - os: macos-13
+          # Runners Intel gratuitos (macos-13) foram aposentados pelo GitHub;
+          # o binário Intel é cross-compilado no runner ARM.
+          - os: macos-latest
             alvo: macos-x64
+            target: x86_64-apple-darwin
             binario: vinculo
             artefato: vinculo-macos-x64
           - os: ubuntu-latest
@@ -36,6 +39,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target || '' }}
 
       - uses: Swatinem/rust-cache@v2
 
@@ -51,11 +56,22 @@ jobs:
         run: echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
 
       - name: Build
-        run: cargo build --release -p vinculo
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo build --release -p vinculo --target "${{ matrix.target }}"
+          else
+            cargo build --release -p vinculo
+          fi
 
       - name: Renomear binário
         shell: bash
-        run: cp "target/release/${{ matrix.binario }}" "${{ matrix.artefato }}"
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            cp "target/${{ matrix.target }}/release/${{ matrix.binario }}" "${{ matrix.artefato }}"
+          else
+            cp "target/release/${{ matrix.binario }}" "${{ matrix.artefato }}"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
