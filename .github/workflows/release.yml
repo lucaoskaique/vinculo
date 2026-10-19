@@ -38,6 +38,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Confere versão do Cargo vs tag
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VER=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          if [ "$TAG" != "$VER" ]; then
+            echo "::error::Tag v$TAG não bate com a versão $VER do Cargo.toml (o auto-update compara versões)."
+            exit 1
+          fi
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target || '' }}
@@ -77,6 +87,23 @@ jobs:
         with:
           name: ${{ matrix.artefato }}
           path: ${{ matrix.artefato }}
+
+      # Instalador do Windows (Inno Setup): instala por usuário em
+      # %LOCALAPPDATA%\Programs\Vinculo, com atalhos e desinstalador.
+      - name: Instalador (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $env:VINCULO_VERSAO = "$env:GITHUB_REF_NAME".TrimStart("v")
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" instalador\vinculo.iss
+
+      - name: Publicar artefato do instalador
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: vinculo-setup-windows.exe
+          path: instalador/Output/vinculo-setup-windows.exe
 
   publicar:
     name: publicar release
