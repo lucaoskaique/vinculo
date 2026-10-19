@@ -67,6 +67,16 @@ Pendências por plataforma:
 - [ ] Fonte da UI: hoje pede "Segoe UI Variable Text"; nos outros SOs o Slint cai na
       fonte padrão do sistema (ok), mas vale definir por plataforma.
 
+## Auditoria RustSec (job informativo do CI)
+
+- [ ] **Migrar a crate vinculo-relatorio para uma lib de PDF mantida** (printpdf
+      moderno direto, krilla ou typst). O genpdf 0.2 arrasta printpdf 0.3 com:
+      - `lopdf` RUSTSEC-2026-0187 (stack overflow ao *parsear* PDFs aninhados) —
+        **risco aceito por ora**: o Vínculo só escreve PDFs, nunca abre PDFs de
+        terceiros; não há superfície de ataque enquanto isso valer.
+      - 4 crates sem manutenção (bincode, encoding, lzw, rusttype), transitivas.
+      Quando migrar, tornar o job `auditoria` bloqueante no CI.
+
 ## Outros pendentes
 - [ ] SQLCipher / criptografia em repouso do banco — **antes de dados clínicos reais**.
 - [ ] Esconder seletores de dispositivo atrás de "Configurações avançadas de áudio".
