@@ -244,6 +244,62 @@ fn atualizar_info_audio(ui: &MainWindow, db: &Db, sessao_id: i64) -> Option<f64>
     }
 }
 
+/// Máscaras de digitação dos campos de formulário.
+fn aplicar_mascara(tipo: &str, texto: &str) -> String {
+    let digitos: String = texto.chars().filter(|c| c.is_ascii_digit()).collect();
+    match tipo {
+        // HH:MM — insere o ":" após as duas primeiras casas.
+        "hora" => {
+            let d = &digitos[..digitos.len().min(4)];
+            if d.len() <= 2 {
+                d.to_string()
+            } else {
+                format!("{}:{}", &d[..2], &d[2..])
+            }
+        }
+        // (DD) 99999-9999 — formata conforme digita, fixo e celular.
+        "telefone" => {
+            let d = &digitos[..digitos.len().min(11)];
+            match d.len() {
+                0 => String::new(),
+                1..=2 => format!("({d}"),
+                3..=6 => format!("({}) {}", &d[..2], &d[2..]),
+                7..=10 => format!("({}) {}-{}", &d[..2], &d[2..d.len() - 4], &d[d.len() - 4..]),
+                _ => format!("({}) {}-{}", &d[..2], &d[2..7], &d[7..]),
+            }
+        }
+        // Valor em reais: dígitos e uma única vírgula com até 2 casas.
+        "valor" => {
+            let mut saida = String::new();
+            let mut tem_virgula = false;
+            let mut casas = 0;
+            for c in texto.chars() {
+                if c.is_ascii_digit() {
+                    if tem_virgula {
+                        if casas < 2 {
+                            saida.push(c);
+                            casas += 1;
+                        }
+                    } else {
+                        saida.push(c);
+                    }
+                } else if (c == ',' || c == '.') && !tem_virgula && !saida.is_empty() {
+                    saida.push(',');
+                    tem_virgula = true;
+                }
+            }
+            saida
+        }
+        // E-mail: sem espaços e em minúsculas.
+        "email" => texto
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+            .to_lowercase(),
+        _ => texto.to_string(),
+    }
+}
+
 fn status_chave_ia() -> String {
     match vinculo_ai::origem_api_key() {
         Some(origem) => format!("✓ Chave configurada ({origem})."),
@@ -258,6 +314,7 @@ fn recarregar_config(ui: &MainWindow, db: &Db) {
     ui.set_cfg_crp(valor("perfil.crp").into());
     ui.set_cfg_email(valor("perfil.email").into());
     ui.set_cfg_telefone(valor("perfil.telefone").into());
+    ui.set_cfg_workspace(vinculo_ai::obter_workspace_id().unwrap_or_default().into());
     ui.set_cfg_status_ia(status_chave_ia().into());
     ui.set_cfg_status("".into());
 }
@@ -950,6 +1007,26 @@ fn main() -> Result<()> {
             }
         }
     });
+
+    ui.on_salvar_workspace_ia({
+        let ui_weak = ui.as_weak();
+        move |valor| {
+            let ui = ui_weak.unwrap();
+            match vinculo_ai::salvar_workspace_id(valor.as_str()) {
+                Ok(_) => {
+                    let msg = if valor.trim().is_empty() {
+                        "Workspace ID removido."
+                    } else {
+                        "Workspace ID salvo."
+                    };
+                    ui.set_cfg_status(msg.into());
+                }
+                Err(e) => ui.set_cfg_status(format!("Erro ao salvar o workspace: {e}").into()),
+            }
+        }
+    });
+
+    ui.on_mascarar(|tipo, texto| aplicar_mascara(tipo.as_str(), texto.as_str()).into());
 
     ui.run()?;
     Ok(())
