@@ -41,6 +41,20 @@ impl Db {
         Ok(self.conn.last_insert_rowid())
     }
 
+    pub fn atualizar_paciente(
+        &self,
+        id: i64,
+        nome: &str,
+        telefone: Option<&str>,
+        email: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE pacientes SET nome = ?2, telefone = ?3, email = ?4 WHERE id = ?1",
+            params![id, nome, telefone, email],
+        )?;
+        Ok(())
+    }
+
     pub fn listar_pacientes(&self) -> Result<Vec<Paciente>> {
         let mut stmt = self
             .conn

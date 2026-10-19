@@ -70,6 +70,7 @@ struct Estado {
     paciente_ids: Vec<i64>,
     sessao_aberta: Option<i64>,
     paciente_da_sessao: Option<i64>,
+    paciente_em_edicao: Option<i64>,
     gravador: Option<vinculo_audio::Gravador>,
     reprodutor: Option<vinculo_audio::Reprodutor>,
     duracao_audio_s: f64,
@@ -346,6 +347,7 @@ fn main() -> Result<()> {
         paciente_ids: Vec::new(),
         sessao_aberta: None,
         paciente_da_sessao: None,
+        paciente_em_edicao: None,
         gravador: None,
         reprodutor: None,
         duracao_audio_s: 0.0,
@@ -418,25 +420,83 @@ fn main() -> Result<()> {
         }
     });
 
-    // ---------- pacientes ----------
-    ui.on_adicionar_paciente({
+    // ---------- pacientes (criar/editar) ----------
+    ui.on_salvar_paciente({
         let ui_weak = ui.as_weak();
         let db = Rc::clone(&db);
         let estado = Rc::clone(&estado);
-        move |nome, telefone, email| {
+        move || {
             let ui = ui_weak.unwrap();
-            let nome = nome.trim().to_string();
+            let nome = ui.get_pac_nome().trim().to_string();
             if nome.is_empty() {
                 return;
             }
-            let tel = telefone.trim();
-            let mail = email.trim();
-            let _ = db.inserir_paciente(
-                &nome,
-                (!tel.is_empty()).then_some(tel),
-                (!mail.is_empty()).then_some(mail),
-            );
-            estado.borrow_mut().paciente_ids = recarregar_pacientes(&ui, &db);
+            let tel = aplicar_mascara("telefone", ui.get_pac_telefone().as_str());
+            let mail = aplicar_mascara("email", ui.get_pac_email().as_str());
+            let resultado = match estado.borrow().paciente_em_edicao {
+                Some(id) => db.atualizar_paciente(
+                    id,
+                    &nome,
+                    (!tel.is_empty()).then_some(tel.as_str()),
+                    (!mail.is_empty()).then_some(mail.as_str()),
+                ),
+                None => db
+                    .inserir_paciente(
+                        &nome,
+                        (!tel.is_empty()).then_some(tel.as_str()),
+                        (!mail.is_empty()).then_some(mail.as_str()),
+                    )
+                    .map(|_| ()),
+            };
+            if resultado.is_ok() {
+                let mut e = estado.borrow_mut();
+                e.paciente_em_edicao = None;
+                e.paciente_ids = recarregar_pacientes(&ui, &db);
+                ui.set_pac_nome("".into());
+                ui.set_pac_telefone("".into());
+                ui.set_pac_email("".into());
+                ui.set_editando_paciente(false);
+            }
+        }
+    });
+
+    ui.on_editar_paciente({
+        let ui_weak = ui.as_weak();
+        let db = Rc::clone(&db);
+        let estado = Rc::clone(&estado);
+        move |indice| {
+            let ui = ui_weak.unwrap();
+            let id = {
+                let e = estado.borrow();
+                e.paciente_ids.get(indice.max(0) as usize).copied()
+            };
+            let Some(id) = id else { return };
+            let Some(paciente) = db
+                .listar_pacientes()
+                .unwrap_or_default()
+                .into_iter()
+                .find(|p| p.id == id)
+            else {
+                return;
+            };
+            estado.borrow_mut().paciente_em_edicao = Some(id);
+            ui.set_pac_nome(paciente.nome.into());
+            ui.set_pac_telefone(paciente.telefone.unwrap_or_default().into());
+            ui.set_pac_email(paciente.email.unwrap_or_default().into());
+            ui.set_editando_paciente(true);
+        }
+    });
+
+    ui.on_cancelar_edicao({
+        let ui_weak = ui.as_weak();
+        let estado = Rc::clone(&estado);
+        move || {
+            let ui = ui_weak.unwrap();
+            estado.borrow_mut().paciente_em_edicao = None;
+            ui.set_pac_nome("".into());
+            ui.set_pac_telefone("".into());
+            ui.set_pac_email("".into());
+            ui.set_editando_paciente(false);
         }
     });
 

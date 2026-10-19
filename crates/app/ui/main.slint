@@ -186,6 +186,10 @@ export component MainWindow inherits Window {
     in-out property <[string]> nomes-pacientes;
     // Pacientes
     in-out property <[PacienteVm]> pacientes;
+    in-out property <string> pac-nome;
+    in-out property <string> pac-telefone;
+    in-out property <string> pac-email;
+    in-out property <bool> editando-paciente: false;
     // Prontuário
     in-out property <[EvolucaoVm]> evolucoes;
     in-out property <string> pront-status;
@@ -228,7 +232,9 @@ export component MainWindow inherits Window {
     callback mudar-dia(int);
     callback criar-sessao(int, string, string);
     callback abrir-sessao(int);
-    callback adicionar-paciente(string, string, string);
+    callback salvar-paciente();      // cria ou atualiza, conforme editando-paciente
+    callback editar-paciente(int);   // índice na lista
+    callback cancelar-edicao();
     callback carregar-prontuario(int);
     callback mudar-mes(int);
     callback alternar-pago(int);
@@ -409,8 +415,13 @@ export component MainWindow inherits Window {
                     HorizontalLayout {
                         padding: 12px;
                         spacing: 8px;
-                        le-nome := LineEdit { placeholder-text: "Nome completo"; horizontal-stretch: 1; }
-                        le-tel := LineEdit {
+                        LineEdit {
+                            text <=> pac-nome;
+                            placeholder-text: "Nome completo";
+                            horizontal-stretch: 1;
+                        }
+                        LineEdit {
+                            text <=> pac-telefone;
                             placeholder-text: "Telefone";
                             width: 150px;
                             accepted => { self.text = root.mascarar("telefone", self.text); }
@@ -418,7 +429,8 @@ export component MainWindow inherits Window {
                                 if (!self.has-focus) { self.text = root.mascarar("telefone", self.text); }
                             }
                         }
-                        le-email := LineEdit {
+                        LineEdit {
+                            text <=> pac-email;
                             placeholder-text: "E-mail";
                             width: 200px;
                             accepted => { self.text = root.mascarar("email", self.text); }
@@ -426,29 +438,33 @@ export component MainWindow inherits Window {
                                 if (!self.has-focus) { self.text = root.mascarar("email", self.text); }
                             }
                         }
+                        if editando-paciente : Botao {
+                            texto: "Cancelar";
+                            clicado => { root.cancelar-edicao(); }
+                        }
                         Botao {
-                            texto: "Adicionar";
+                            texto: editando-paciente ? "Salvar alterações" : "Adicionar";
                             primario: true;
-                            clicado => {
-                                root.adicionar-paciente(
-                                    le-nome.text,
-                                    root.mascarar("telefone", le-tel.text),
-                                    root.mascarar("email", le-email.text));
-                                le-nome.text = "";
-                                le-tel.text = "";
-                                le-email.text = "";
-                            }
+                            clicado => { root.salvar-paciente(); }
                         }
                     }
                 }
 
+                Secundario {
+                    text: editando-paciente
+                        ? "Editando cadastro — altere os campos acima e salve."
+                        : "Clique em um paciente para editar o cadastro.";
+                }
+
                 ListView {
-                    for p in pacientes : Rectangle {
+                    for p[idx] in pacientes : Rectangle {
                         height: 62px;
                         CartaoLinha {
                             x: 0; y: 4px;
                             width: parent.width;
                             height: 54px;
+                            clicavel: true;
+                            clicado => { root.editar-paciente(idx); }
                             HorizontalLayout {
                                 padding: 16px;
                                 spacing: 16px;
