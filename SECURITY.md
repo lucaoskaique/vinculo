@@ -15,6 +15,9 @@ Não abra issues públicas para vulnerabilidades. Use o
 
 ## Estado atual (transparência)
 
-- O banco local ainda **não** é criptografado em repouso (SQLCipher no roadmap).
-- A chave de API é armazenada em texto plano no config.toml local.
-- Por isso, o app ainda não deve ser usado com dados clínicos reais.
+- O banco local é **criptografado em repouso** (SQLCipher; chave derivada da
+  senha do profissional via PBKDF2). Bancos legados em texto plano são
+  migrados automaticamente na primeira abertura.
+- A chave de API ainda é armazenada em texto plano no config.toml local
+  (proteção via DPAPI/keychain no roadmap).
+- Os áudios de sessão (WAV) ainda não são criptografados em repouso.

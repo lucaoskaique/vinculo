@@ -78,7 +78,10 @@ Pendências por plataforma:
       Quando migrar, tornar o job `auditoria` bloqueante no CI.
 
 ## Outros pendentes
-- [ ] SQLCipher / criptografia em repouso do banco — **antes de dados clínicos reais**.
+- [x] SQLCipher / criptografia em repouso do banco (senha na tela de bloqueio;
+      migração automática de bancos legados).
+- [ ] Criptografar também os WAVs de sessão e a chave de API (DPAPI/keychain).
+- [ ] Troca de senha do banco (PRAGMA rekey) na tela de Configurações.
 - [ ] Esconder seletores de dispositivo atrás de "Configurações avançadas de áudio".
 - [ ] Download automático do modelo Whisper (ggml-base.bin) na primeira utilização.
 - [ ] Sincronização com Google Calendar.

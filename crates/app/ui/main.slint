@@ -173,6 +173,7 @@ component CartaoLinha inherits Rectangle {
 
 export component MainWindow inherits Window {
     title: "Vínculo";
+    icon: @image-url("../assets/icone-256.png");
     preferred-width: 1120px;
     preferred-height: 740px;
     background: #f5f5f7;
@@ -185,6 +186,10 @@ export component MainWindow inherits Window {
     in-out property <[string]> nomes-pacientes;
     // Pacientes
     in-out property <[PacienteVm]> pacientes;
+    in-out property <string> pac-nome;
+    in-out property <string> pac-telefone;
+    in-out property <string> pac-email;
+    in-out property <bool> editando-paciente: false;
     // Prontuário
     in-out property <[EvolucaoVm]> evolucoes;
     in-out property <string> pront-status;
@@ -203,6 +208,7 @@ export component MainWindow inherits Window {
     in-out property <bool> gravando: false;
     in-out property <bool> ocupado: false;
     in-out property <bool> tem-audio: false;
+    in-out property <bool> precisa-modelo: false;
     in-out property <bool> reproduzindo: false;
     in-out property <string> duracao-audio;
     in-out property <[float]> forma-onda;
@@ -216,28 +222,48 @@ export component MainWindow inherits Window {
     in-out property <string> cfg-crp;
     in-out property <string> cfg-email;
     in-out property <string> cfg-telefone;
+    in-out property <string> cfg-workspace;
     in-out property <string> cfg-status-ia;
     in-out property <string> cfg-status;
+    // Atualizações
+    in-out property <bool> atualizacao-disponivel: false;
+    in-out property <string> atualizacao-status;
+    in-out property <string> atualizacao-url;
 
-    in-out property <int> tela: 0;
+    // Tela de bloqueio (criptografia do banco)
+    in-out property <string> trava-senha;
+    in-out property <string> trava-confirma;
+    in-out property <string> trava-status;
+    in-out property <bool> trava-modo-criacao: false;
+    in-out property <bool> trava-migracao: false;
+
+    in-out property <int> tela: 9;
 
     callback tela-mudou(int);
+    callback desbloquear(string, string); // senha, confirmação
     callback mudar-dia(int);
     callback criar-sessao(int, string, string);
     callback abrir-sessao(int);
-    callback adicionar-paciente(string, string, string);
+    callback salvar-paciente();      // cria ou atualiza, conforme editando-paciente
+    callback editar-paciente(int);   // índice na lista
+    callback cancelar-edicao();
     callback carregar-prontuario(int);
     callback mudar-mes(int);
     callback alternar-pago(int);
     callback alternar-gravacao(int, int, int); // fonte, microfone, saída
     callback alternar-reproducao();
     callback apagar-gravacao();
+    callback baixar-modelo();
     callback transcrever();
     callback gerar-rascunho();
     callback salvar-evolucao(string);
     callback marcar-realizada();
     callback salvar-perfil(string, string, string, string); // nome, crp, email, telefone
     callback salvar-chave-ia(string);
+    callback salvar-workspace-ia(string);
+    callback atualizar-app();
+    // Máscaras de digitação (implementadas no Rust): tipo + texto → texto formatado.
+    callback mascarar(string, string) -> string;
     callback exportar-evolucao(int);        // id da evolução (prontuário)
     callback exportar-rascunho(string);     // texto atual do editor (sessão)
     // Invocados pelo Rust quando tarefas em background terminam.
@@ -286,6 +312,11 @@ export component MainWindow inherits Window {
                 NavItem { rotulo: "Prontuário"; ativo: tela == 2; clicado => { tela = 2; root.tela-mudou(2); } }
                 NavItem { rotulo: "Financeiro"; ativo: tela == 3; clicado => { tela = 3; root.tela-mudou(3); } }
                 Rectangle { }
+                if atualizacao-disponivel : NavItem {
+                    rotulo: "⬆ Atualização disponível";
+                    ativo: false;
+                    clicado => { tela = 5; root.tela-mudou(5); }
+                }
                 NavItem { rotulo: "Configurações"; ativo: tela == 5; clicado => { tela = 5; root.tela-mudou(5); } }
 
                 Text {
@@ -324,13 +355,30 @@ export component MainWindow inherits Window {
                         padding: 12px;
                         spacing: 8px;
                         cb-pac := ComboBox { model: nomes-pacientes; horizontal-stretch: 1; }
-                        le-hora := LineEdit { placeholder-text: "HH:MM"; width: 90px; }
-                        le-valor := LineEdit { placeholder-text: "Valor R$"; width: 100px; }
+                        le-hora := LineEdit {
+                            placeholder-text: "HH:MM";
+                            width: 90px;
+                            accepted => { self.text = root.mascarar("hora", self.text); }
+                            changed has-focus => {
+                                if (!self.has-focus) { self.text = root.mascarar("hora", self.text); }
+                            }
+                        }
+                        le-valor := LineEdit {
+                            placeholder-text: "Valor R$";
+                            width: 100px;
+                            accepted => { self.text = root.mascarar("valor", self.text); }
+                            changed has-focus => {
+                                if (!self.has-focus) { self.text = root.mascarar("valor", self.text); }
+                            }
+                        }
                         Botao {
                             texto: "Nova sessão";
                             primario: true;
                             clicado => {
-                                root.criar-sessao(cb-pac.current-index, le-hora.text, le-valor.text);
+                                root.criar-sessao(
+                                    cb-pac.current-index,
+                                    root.mascarar("hora", le-hora.text),
+                                    root.mascarar("valor", le-valor.text));
                                 le-hora.text = "";
                                 le-valor.text = "";
                             }
@@ -385,29 +433,56 @@ export component MainWindow inherits Window {
                     HorizontalLayout {
                         padding: 12px;
                         spacing: 8px;
-                        le-nome := LineEdit { placeholder-text: "Nome completo"; horizontal-stretch: 1; }
-                        le-tel := LineEdit { placeholder-text: "Telefone"; width: 150px; }
-                        le-email := LineEdit { placeholder-text: "E-mail"; width: 200px; }
-                        Botao {
-                            texto: "Adicionar";
-                            primario: true;
-                            clicado => {
-                                root.adicionar-paciente(le-nome.text, le-tel.text, le-email.text);
-                                le-nome.text = "";
-                                le-tel.text = "";
-                                le-email.text = "";
+                        LineEdit {
+                            text <=> pac-nome;
+                            placeholder-text: "Nome completo";
+                            horizontal-stretch: 1;
+                        }
+                        LineEdit {
+                            text <=> pac-telefone;
+                            placeholder-text: "Telefone";
+                            width: 150px;
+                            accepted => { self.text = root.mascarar("telefone", self.text); }
+                            changed has-focus => {
+                                if (!self.has-focus) { self.text = root.mascarar("telefone", self.text); }
                             }
+                        }
+                        LineEdit {
+                            text <=> pac-email;
+                            placeholder-text: "E-mail";
+                            width: 200px;
+                            accepted => { self.text = root.mascarar("email", self.text); }
+                            changed has-focus => {
+                                if (!self.has-focus) { self.text = root.mascarar("email", self.text); }
+                            }
+                        }
+                        if editando-paciente : Botao {
+                            texto: "Cancelar";
+                            clicado => { root.cancelar-edicao(); }
+                        }
+                        Botao {
+                            texto: editando-paciente ? "Salvar alterações" : "Adicionar";
+                            primario: true;
+                            clicado => { root.salvar-paciente(); }
                         }
                     }
                 }
 
+                Secundario {
+                    text: editando-paciente
+                        ? "Editando cadastro — altere os campos acima e salve."
+                        : "Clique em um paciente para editar o cadastro.";
+                }
+
                 ListView {
-                    for p in pacientes : Rectangle {
+                    for p[idx] in pacientes : Rectangle {
                         height: 62px;
                         CartaoLinha {
                             x: 0; y: 4px;
                             width: parent.width;
                             height: 54px;
+                            clicavel: true;
+                            clicado => { root.editar-paciente(idx); }
                             HorizontalLayout {
                                 padding: 16px;
                                 spacing: 16px;
@@ -567,12 +642,28 @@ export component MainWindow inherits Window {
                         HorizontalLayout {
                             spacing: 8px;
                             Rotulo { text: "E-mail:"; vertical-alignment: center; width: 110px; }
-                            LineEdit { text <=> cfg-email; placeholder-text: "voce@exemplo.com"; horizontal-stretch: 1; }
+                            LineEdit {
+                                text <=> cfg-email;
+                                placeholder-text: "voce@exemplo.com";
+                                horizontal-stretch: 1;
+                                accepted => { self.text = root.mascarar("email", self.text); }
+                            changed has-focus => {
+                                if (!self.has-focus) { self.text = root.mascarar("email", self.text); }
+                            }
+                            }
                         }
                         HorizontalLayout {
                             spacing: 8px;
                             Rotulo { text: "Telefone:"; vertical-alignment: center; width: 110px; }
-                            LineEdit { text <=> cfg-telefone; placeholder-text: "(21) 99999-9999"; horizontal-stretch: 1; }
+                            LineEdit {
+                                text <=> cfg-telefone;
+                                placeholder-text: "(21) 99999-9999";
+                                horizontal-stretch: 1;
+                                accepted => { self.text = root.mascarar("telefone", self.text); }
+                            changed has-focus => {
+                                if (!self.has-focus) { self.text = root.mascarar("telefone", self.text); }
+                            }
+                            }
                         }
 
                         HorizontalLayout {
@@ -580,7 +671,13 @@ export component MainWindow inherits Window {
                             Botao {
                                 texto: "Salvar dados";
                                 primario: true;
-                                clicado => { root.salvar-perfil(cfg-nome, cfg-crp, cfg-email, cfg-telefone); }
+                                clicado => {
+                                    root.salvar-perfil(
+                                        cfg-nome,
+                                        cfg-crp,
+                                        root.mascarar("email", cfg-email),
+                                        root.mascarar("telefone", cfg-telefone));
+                                }
                             }
                         }
                     }
@@ -613,11 +710,49 @@ export component MainWindow inherits Window {
                             }
                         }
 
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Rotulo { text: "Workspace ID:"; vertical-alignment: center; width: 110px; }
+                            le-workspace := LineEdit {
+                                text <=> cfg-workspace;
+                                placeholder-text: "Opcional — só se a sua chave exigir (wrkspc_…)";
+                                horizontal-stretch: 1;
+                            }
+                            Botao {
+                                texto: "Salvar";
+                                clicado => { root.salvar-workspace-ia(le-workspace.text); }
+                            }
+                        }
+
                         Text {
-                            text: "A chave é usada apenas para gerar rascunhos de evolução e fica guardada neste computador. As transcrições são anonimizadas antes de qualquer envio. Se a variável de ambiente ANTHROPIC_API_KEY estiver definida, ela tem prioridade sobre a chave salva aqui.";
+                            text: "A chave é usada apenas para gerar rascunhos de evolução e fica guardada neste computador. As transcrições são anonimizadas antes de qualquer envio. Se a variável de ambiente ANTHROPIC_API_KEY estiver definida, ela tem prioridade sobre a chave salva aqui. O Workspace ID só é necessário quando a Claude API pedir (chaves de organização).";
                             font-size: 12px;
                             color: #6e6e73;
                             wrap: word-wrap;
+                        }
+                    }
+                }
+
+                Cartao {
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 10px;
+
+                        Rotulo { text: "ATUALIZAÇÕES"; }
+                        Secundario { text: atualizacao-status; wrap: word-wrap; }
+                        if atualizacao-disponivel : HorizontalLayout {
+                            spacing: 8px;
+                            Botao {
+                                texto: "Atualizar agora";
+                                primario: true;
+                                enabled: !ocupado;
+                                clicado => { root.atualizar-app(); }
+                            }
+                            Secundario {
+                                text: "O app baixa a nova versão e reinicia sozinho.";
+                                vertical-alignment: center;
+                            }
+                            Rectangle { }
                         }
                     }
                 }
@@ -729,6 +864,23 @@ export component MainWindow inherits Window {
                             Rectangle { }
                         }
 
+                        // Instalação única do modelo de transcrição.
+                        if precisa-modelo : HorizontalLayout {
+                            spacing: 10px;
+                            Botao {
+                                texto: "⬇ Instalar transcrição (download de 142 MB)";
+                                primario: true;
+                                enabled: !ocupado;
+                                clicado => { root.baixar-modelo(); }
+                            }
+                            Secundario {
+                                text: "Uma única vez. Depois, a transcrição funciona offline, sem o áudio sair do computador.";
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                                horizontal-stretch: 1;
+                            }
+                        }
+
                         // Conferência da gravação: forma de onda + ouvir/apagar.
                         if tem-audio && !gravando : VerticalLayout {
                             spacing: 8px;
@@ -810,6 +962,81 @@ export component MainWindow inherits Window {
                         clicado => { root.salvar-evolucao(rascunho); }
                     }
                 }
+                }
+            }
+        }
+    }
+
+    // ---------------- Tela de bloqueio (cobre tudo; tela 9) ----------------
+    if tela == 9 : Rectangle {
+        background: #f5f5f7;
+
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                Cartao {
+                    width: 440px;
+                    VerticalLayout {
+                        padding: 32px;
+                        spacing: 12px;
+
+                        HorizontalLayout {
+                            alignment: center;
+                            Image {
+                                source: @image-url("../assets/icone-256.png");
+                                width: 72px;
+                                height: 72px;
+                            }
+                        }
+                        Text {
+                            text: "Vínculo";
+                            font-size: 24px;
+                            font-weight: 700;
+                            letter-spacing: -0.3px;
+                            color: #1d1d1f;
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            text: trava-modo-criacao
+                                ? (trava-migracao
+                                    ? "Crie uma senha para proteger seus dados. O banco atual será criptografado — sem a senha, ninguém abre o prontuário, nem você."
+                                    : "Crie a senha que protegerá seus dados neste computador. Sem ela, ninguém abre o prontuário — nem você.")
+                                : "Digite sua senha para desbloquear.";
+                            font-size: 13px;
+                            color: #6e6e73;
+                            wrap: word-wrap;
+                            horizontal-alignment: center;
+                        }
+
+                        LineEdit {
+                            text <=> trava-senha;
+                            input-type: InputType.password;
+                            placeholder-text: "Senha";
+                            accepted => { root.desbloquear(trava-senha, trava-confirma); }
+                        }
+                        if trava-modo-criacao : LineEdit {
+                            text <=> trava-confirma;
+                            input-type: InputType.password;
+                            placeholder-text: "Confirme a senha";
+                            accepted => { root.desbloquear(trava-senha, trava-confirma); }
+                        }
+
+                        Botao {
+                            texto: trava-modo-criacao ? "Criar senha e entrar" : "Desbloquear";
+                            primario: true;
+                            enabled: trava-senha != "";
+                            clicado => { root.desbloquear(trava-senha, trava-confirma); }
+                        }
+
+                        Text {
+                            text: trava-status;
+                            font-size: 12.5px;
+                            color: #c23b22;
+                            wrap: word-wrap;
+                            horizontal-alignment: center;
+                        }
+                    }
                 }
             }
         }

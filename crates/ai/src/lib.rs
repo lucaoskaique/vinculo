@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 /// Configuração de acesso à Claude API.
 pub struct ConfigIa {
     pub api_key: String,
+    /// Exigido pela API quando a chave é de organização (não vinculada a workspace).
+    pub workspace_id: Option<String>,
 }
 
 impl ConfigIa {
@@ -26,7 +28,10 @@ impl ConfigIa {
         if let Ok(chave) = std::env::var("ANTHROPIC_API_KEY") {
             let chave = chave.trim().to_string();
             if !chave.is_empty() {
-                return Ok(ConfigIa { api_key: chave });
+                return Ok(ConfigIa {
+                    api_key: chave,
+                    workspace_id: obter_workspace_id(),
+                });
             }
         }
 
@@ -40,7 +45,10 @@ impl ConfigIa {
                 )
             })?;
             if let Some(chave) = extrair_api_key_toml(&conteudo) {
-                return Ok(ConfigIa { api_key: chave });
+                return Ok(ConfigIa {
+                    api_key: chave,
+                    workspace_id: obter_workspace_id(),
+                });
             }
             anyhow::bail!(
                 "o arquivo {} existe, mas não contém o campo api_key = \"...\"",
@@ -57,16 +65,21 @@ impl ConfigIa {
     }
 }
 
-/// Extrai o valor de `api_key = "..."` de um TOML simples, sem dependência externa.
-/// Ignora comentários e espaços; aceita aspas simples ou duplas.
+/// Extrai o valor de `api_key = "..."` do config.toml.
 fn extrair_api_key_toml(conteudo: &str) -> Option<String> {
+    extrair_campo_toml(conteudo, "api_key")
+}
+
+/// Extrai o valor de `<campo> = "..."` de um TOML simples, sem dependência externa.
+/// Ignora comentários e espaços; aceita aspas simples ou duplas.
+fn extrair_campo_toml(conteudo: &str, campo: &str) -> Option<String> {
     for linha in conteudo.lines() {
         let linha = linha.trim();
         if linha.starts_with('#') {
             continue;
         }
         if let Some((chave, valor)) = linha.split_once('=') {
-            if chave.trim() == "api_key" {
+            if chave.trim() == campo {
                 // Remove comentário no fim da linha, se houver, e as aspas.
                 let valor = valor.trim();
                 let valor = valor
@@ -96,6 +109,31 @@ pub fn salvar_api_key(chave: &str) -> Result<PathBuf> {
     if chave.is_empty() {
         anyhow::bail!("a chave não pode ser vazia");
     }
+    salvar_campo("api_key", chave)
+}
+
+/// Grava o workspace ID no config.toml; valor vazio remove o campo.
+pub fn salvar_workspace_id(valor: &str) -> Result<PathBuf> {
+    salvar_campo("workspace_id", valor.trim())
+}
+
+/// Workspace ID configurado: variável ANTHROPIC_WORKSPACE_ID ou campo
+/// `workspace_id` do config.toml. `None` quando não configurado.
+pub fn obter_workspace_id() -> Option<String> {
+    if let Ok(valor) = std::env::var("ANTHROPIC_WORKSPACE_ID") {
+        let valor = valor.trim().to_string();
+        if !valor.is_empty() {
+            return Some(valor);
+        }
+    }
+    let caminho = caminho_config().ok()?;
+    let conteudo = std::fs::read_to_string(&caminho).ok()?;
+    extrair_campo_toml(&conteudo, "workspace_id")
+}
+
+/// Grava (ou substitui) `campo = "valor"` no config.toml, preservando as demais
+/// linhas. Valor vazio apenas remove o campo. Retorna o caminho do arquivo.
+fn salvar_campo(campo: &str, valor: &str) -> Result<PathBuf> {
     let caminho = caminho_config()?;
     if let Some(pai) = caminho.parent() {
         std::fs::create_dir_all(pai)
@@ -107,12 +145,14 @@ pub fn salvar_api_key(chave: &str) -> Result<PathBuf> {
         .filter(|l| {
             l.trim()
                 .split_once('=')
-                .map(|(k, _)| k.trim() != "api_key")
+                .map(|(k, _)| k.trim() != campo)
                 .unwrap_or(true)
         })
         .map(str::to_string)
         .collect();
-    linhas.push(format!("api_key = \"{}\"", chave.replace('"', "")));
+    if !valor.is_empty() {
+        linhas.push(format!("{} = \"{}\"", campo, valor.replace('"', "")));
+    }
     std::fs::write(&caminho, linhas.join("\n") + "\n")
         .with_context(|| format!("falha ao gravar {}", caminho.display()))?;
     Ok(caminho)
@@ -342,11 +382,16 @@ pub fn gerar_rascunho(cfg: &ConfigIa, transcricao_anon: &str) -> Result<String> 
         }],
     };
 
-    let resposta = cliente
+    let mut requisicao = cliente
         .post(URL_API)
         .header("x-api-key", &cfg.api_key)
         .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
+        .header("content-type", "application/json");
+    // Chaves de organização (não vinculadas a workspace) exigem este header.
+    if let Some(workspace) = &cfg.workspace_id {
+        requisicao = requisicao.header("anthropic-workspace-id", workspace);
+    }
+    let resposta = requisicao
         .json(&corpo)
         .send()
         .context("falha ao conectar à Claude API")?;

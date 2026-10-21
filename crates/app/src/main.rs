@@ -16,6 +16,122 @@ fn dir_dados() -> PathBuf {
     vinculo_core::dir_dados()
 }
 
+const URL_MODELO: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin";
+
+fn caminho_modelo() -> PathBuf {
+    dir_dados().join("models").join("ggml-base.bin")
+}
+
+/// Baixa `url` para `destino`, reportando o progresso (0–100).
+/// Grava num arquivo .part e renomeia ao final, para nunca deixar um
+/// download corrompido no caminho definitivo.
+fn baixar_arquivo(url: &str, destino: &std::path::Path, progresso: impl Fn(u32)) -> Result<()> {
+    use std::io::{Read, Write};
+
+    if let Some(pai) = destino.parent() {
+        std::fs::create_dir_all(pai)?;
+    }
+    let cliente = reqwest::blocking::Client::builder()
+        .timeout(None) // download longo; sem timeout global
+        .user_agent("vinculo-app")
+        .build()?;
+    let mut resposta = cliente.get(url).send()?.error_for_status()?;
+    let total = resposta.content_length().unwrap_or(0);
+
+    let temporario = destino.with_extension("part");
+    let mut arquivo = std::fs::File::create(&temporario)?;
+    let mut buffer = [0u8; 64 * 1024];
+    let mut lido: u64 = 0;
+    let mut ultimo_pct = 0u32;
+    loop {
+        let n = resposta.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        arquivo.write_all(&buffer[..n])?;
+        lido += n as u64;
+        if let Some(pct) = (lido * 100).checked_div(total) {
+            let pct = pct as u32;
+            if pct != ultimo_pct {
+                ultimo_pct = pct;
+                progresso(pct);
+            }
+        }
+    }
+    arquivo.flush()?;
+    drop(arquivo);
+    std::fs::rename(&temporario, destino)?;
+    Ok(())
+}
+
+fn baixar_modelo(destino: &std::path::Path, progresso: impl Fn(u32)) -> Result<()> {
+    baixar_arquivo(URL_MODELO, destino, progresso)
+}
+
+// ---------------------------------------------------------------------------
+// Atualização automática (GitHub Releases)
+// ---------------------------------------------------------------------------
+
+const URL_ULTIMA_RELEASE: &str =
+    "https://api.github.com/repos/lucaoskaique/vinculo/releases/latest";
+
+#[cfg(windows)]
+const ARTEFATO_ATUALIZACAO: &str = "vinculo-windows-x64.exe";
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const ARTEFATO_ATUALIZACAO: &str = "vinculo-macos-arm64";
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const ARTEFATO_ATUALIZACAO: &str = "vinculo-macos-x64";
+#[cfg(target_os = "linux")]
+const ARTEFATO_ATUALIZACAO: &str = "vinculo-linux-x64";
+
+#[derive(serde::Deserialize)]
+struct ReleaseGh {
+    tag_name: String,
+    assets: Vec<AssetGh>,
+}
+
+#[derive(serde::Deserialize)]
+struct AssetGh {
+    name: String,
+    browser_download_url: String,
+}
+
+/// "v1.2.3" → (1, 2, 3); partes ausentes/inválidas viram 0.
+fn versao_tripla(v: &str) -> (u64, u64, u64) {
+    let mut partes = v
+        .trim()
+        .trim_start_matches('v')
+        .split('.')
+        .map(|p| p.parse::<u64>().unwrap_or(0));
+    (
+        partes.next().unwrap_or(0),
+        partes.next().unwrap_or(0),
+        partes.next().unwrap_or(0),
+    )
+}
+
+/// `Some((versao, url))` quando a release mais recente no GitHub é mais nova
+/// que este binário e tem artefato para a plataforma atual.
+fn verificar_atualizacao() -> Result<Option<(String, String)>> {
+    let cliente = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent("vinculo-app")
+        .build()?;
+    let release: ReleaseGh = cliente
+        .get(URL_ULTIMA_RELEASE)
+        .send()?
+        .error_for_status()?
+        .json()?;
+    if versao_tripla(&release.tag_name) <= versao_tripla(env!("CARGO_PKG_VERSION")) {
+        return Ok(None);
+    }
+    Ok(release
+        .assets
+        .iter()
+        .find(|a| a.name == ARTEFATO_ATUALIZACAO)
+        .map(|a| (release.tag_name.clone(), a.browser_download_url.clone())))
+}
+
 struct Estado {
     dia: NaiveDate,
     ano: i32,
@@ -23,6 +139,7 @@ struct Estado {
     paciente_ids: Vec<i64>,
     sessao_aberta: Option<i64>,
     paciente_da_sessao: Option<i64>,
+    paciente_em_edicao: Option<i64>,
     gravador: Option<vinculo_audio::Gravador>,
     reprodutor: Option<vinculo_audio::Reprodutor>,
     duracao_audio_s: f64,
@@ -197,6 +314,62 @@ fn atualizar_info_audio(ui: &MainWindow, db: &Db, sessao_id: i64) -> Option<f64>
     }
 }
 
+/// Máscaras de digitação dos campos de formulário.
+fn aplicar_mascara(tipo: &str, texto: &str) -> String {
+    let digitos: String = texto.chars().filter(|c| c.is_ascii_digit()).collect();
+    match tipo {
+        // HH:MM — insere o ":" após as duas primeiras casas.
+        "hora" => {
+            let d = &digitos[..digitos.len().min(4)];
+            if d.len() <= 2 {
+                d.to_string()
+            } else {
+                format!("{}:{}", &d[..2], &d[2..])
+            }
+        }
+        // (DD) 99999-9999 — formata conforme digita, fixo e celular.
+        "telefone" => {
+            let d = &digitos[..digitos.len().min(11)];
+            match d.len() {
+                0 => String::new(),
+                1..=2 => format!("({d}"),
+                3..=6 => format!("({}) {}", &d[..2], &d[2..]),
+                7..=10 => format!("({}) {}-{}", &d[..2], &d[2..d.len() - 4], &d[d.len() - 4..]),
+                _ => format!("({}) {}-{}", &d[..2], &d[2..7], &d[7..]),
+            }
+        }
+        // Valor em reais: dígitos e uma única vírgula com até 2 casas.
+        "valor" => {
+            let mut saida = String::new();
+            let mut tem_virgula = false;
+            let mut casas = 0;
+            for c in texto.chars() {
+                if c.is_ascii_digit() {
+                    if tem_virgula {
+                        if casas < 2 {
+                            saida.push(c);
+                            casas += 1;
+                        }
+                    } else {
+                        saida.push(c);
+                    }
+                } else if (c == ',' || c == '.') && !tem_virgula && !saida.is_empty() {
+                    saida.push(',');
+                    tem_virgula = true;
+                }
+            }
+            saida
+        }
+        // E-mail: sem espaços e em minúsculas.
+        "email" => texto
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+            .to_lowercase(),
+        _ => texto.to_string(),
+    }
+}
+
 fn status_chave_ia() -> String {
     match vinculo_ai::origem_api_key() {
         Some(origem) => format!("✓ Chave configurada ({origem})."),
@@ -211,6 +384,7 @@ fn recarregar_config(ui: &MainWindow, db: &Db) {
     ui.set_cfg_crp(valor("perfil.crp").into());
     ui.set_cfg_email(valor("perfil.email").into());
     ui.set_cfg_telefone(valor("perfil.telefone").into());
+    ui.set_cfg_workspace(vinculo_ai::obter_workspace_id().unwrap_or_default().into());
     ui.set_cfg_status_ia(status_chave_ia().into());
     ui.set_cfg_status("".into());
 }
@@ -230,10 +404,79 @@ fn recarregar_prontuario(ui: &MainWindow, db: &Db, paciente_id: i64) {
 }
 
 fn main() -> Result<()> {
-    let db = Rc::new(Db::open(&dir_dados().join("vinculo.db"))?);
-    db.semear_exemplo()?;
-
     let ui = MainWindow::new()?;
+    let caminho_db = dir_dados().join("vinculo.db");
+    let em_texto_plano = Db::banco_em_texto_plano(&caminho_db);
+    let modo_criacao = !caminho_db.exists() || em_texto_plano;
+    ui.set_trava_migracao(em_texto_plano);
+    ui.set_trava_modo_criacao(modo_criacao);
+
+    ui.on_desbloquear({
+        let ui_weak = ui.as_weak();
+        move |senha, confirmacao| {
+            let ui = ui_weak.unwrap();
+            let senha = senha.to_string();
+            if modo_criacao {
+                if senha.chars().count() < 6 {
+                    ui.set_trava_status("A senha precisa ter pelo menos 6 caracteres.".into());
+                    return;
+                }
+                if senha != confirmacao.as_str() {
+                    ui.set_trava_status("As senhas não conferem.".into());
+                    return;
+                }
+                if em_texto_plano {
+                    ui.set_trava_status("Criptografando o banco existente…".into());
+                    if let Err(e) = Db::cifrar_banco_existente(&caminho_db, &senha) {
+                        ui.set_trava_status(format!("Falha ao criptografar: {e}").into());
+                        return;
+                    }
+                }
+            }
+            match Db::abrir_cifrado(&caminho_db, &senha) {
+                Ok(db) => {
+                    let db = Rc::new(db);
+                    let _ = db.semear_exemplo();
+                    configurar_app(&ui, db);
+                    ui.set_trava_senha("".into());
+                    ui.set_trava_confirma("".into());
+                    ui.set_trava_status("".into());
+                    ui.set_tela(0);
+                }
+                Err(e) => ui.set_trava_status(format!("{e}").into()),
+            }
+        }
+    });
+
+    // Maximizar direto no show() é atropelado pelo dimensionamento inicial do
+    // backend; reafirmamos num timer de disparo único já dentro do loop.
+    ui.show()?;
+    ui.window().set_maximized(true);
+    let maximizador = slint::Timer::default();
+    maximizador.start(
+        slint::TimerMode::SingleShot,
+        std::time::Duration::from_millis(150),
+        {
+            let ui_weak = ui.as_weak();
+            move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    // O backend às vezes marca a janela como maximizada com o
+                    // tamanho errado; o toggle força o Windows a recalcular o
+                    // retângulo (equivalente a restaurar e maximizar de novo).
+                    ui.window().set_maximized(false);
+                    ui.window().set_maximized(true);
+                }
+            }
+        },
+    );
+    slint::run_event_loop()?;
+    drop(maximizador);
+    Ok(())
+}
+
+/// Registra todos os callbacks e carrega os dados iniciais.
+/// Só é chamado após o desbloqueio do banco criptografado.
+fn configurar_app(ui: &MainWindow, db: Rc<Db>) {
     let hoje = Local::now().date_naive();
     let estado = Rc::new(RefCell::new(Estado {
         dia: hoje,
@@ -242,6 +485,7 @@ fn main() -> Result<()> {
         paciente_ids: Vec::new(),
         sessao_aberta: None,
         paciente_da_sessao: None,
+        paciente_em_edicao: None,
         gravador: None,
         reprodutor: None,
         duracao_audio_s: 0.0,
@@ -250,9 +494,9 @@ fn main() -> Result<()> {
         dispositivos_saida: Vec::new(),
     }));
 
-    recarregar_agenda(&ui, &db, hoje);
-    estado.borrow_mut().paciente_ids = recarregar_pacientes(&ui, &db);
-    recarregar_financeiro(&ui, &db, hoje.year(), hoje.month());
+    recarregar_agenda(ui, &db, hoje);
+    estado.borrow_mut().paciente_ids = recarregar_pacientes(ui, &db);
+    recarregar_financeiro(ui, &db, hoje.year(), hoje.month());
 
     // ---------- navegação ----------
     ui.on_tela_mudou({
@@ -314,25 +558,83 @@ fn main() -> Result<()> {
         }
     });
 
-    // ---------- pacientes ----------
-    ui.on_adicionar_paciente({
+    // ---------- pacientes (criar/editar) ----------
+    ui.on_salvar_paciente({
         let ui_weak = ui.as_weak();
         let db = Rc::clone(&db);
         let estado = Rc::clone(&estado);
-        move |nome, telefone, email| {
+        move || {
             let ui = ui_weak.unwrap();
-            let nome = nome.trim().to_string();
+            let nome = ui.get_pac_nome().trim().to_string();
             if nome.is_empty() {
                 return;
             }
-            let tel = telefone.trim();
-            let mail = email.trim();
-            let _ = db.inserir_paciente(
-                &nome,
-                (!tel.is_empty()).then_some(tel),
-                (!mail.is_empty()).then_some(mail),
-            );
-            estado.borrow_mut().paciente_ids = recarregar_pacientes(&ui, &db);
+            let tel = aplicar_mascara("telefone", ui.get_pac_telefone().as_str());
+            let mail = aplicar_mascara("email", ui.get_pac_email().as_str());
+            let resultado = match estado.borrow().paciente_em_edicao {
+                Some(id) => db.atualizar_paciente(
+                    id,
+                    &nome,
+                    (!tel.is_empty()).then_some(tel.as_str()),
+                    (!mail.is_empty()).then_some(mail.as_str()),
+                ),
+                None => db
+                    .inserir_paciente(
+                        &nome,
+                        (!tel.is_empty()).then_some(tel.as_str()),
+                        (!mail.is_empty()).then_some(mail.as_str()),
+                    )
+                    .map(|_| ()),
+            };
+            if resultado.is_ok() {
+                let mut e = estado.borrow_mut();
+                e.paciente_em_edicao = None;
+                e.paciente_ids = recarregar_pacientes(&ui, &db);
+                ui.set_pac_nome("".into());
+                ui.set_pac_telefone("".into());
+                ui.set_pac_email("".into());
+                ui.set_editando_paciente(false);
+            }
+        }
+    });
+
+    ui.on_editar_paciente({
+        let ui_weak = ui.as_weak();
+        let db = Rc::clone(&db);
+        let estado = Rc::clone(&estado);
+        move |indice| {
+            let ui = ui_weak.unwrap();
+            let id = {
+                let e = estado.borrow();
+                e.paciente_ids.get(indice.max(0) as usize).copied()
+            };
+            let Some(id) = id else { return };
+            let Some(paciente) = db
+                .listar_pacientes()
+                .unwrap_or_default()
+                .into_iter()
+                .find(|p| p.id == id)
+            else {
+                return;
+            };
+            estado.borrow_mut().paciente_em_edicao = Some(id);
+            ui.set_pac_nome(paciente.nome.into());
+            ui.set_pac_telefone(paciente.telefone.unwrap_or_default().into());
+            ui.set_pac_email(paciente.email.unwrap_or_default().into());
+            ui.set_editando_paciente(true);
+        }
+    });
+
+    ui.on_cancelar_edicao({
+        let ui_weak = ui.as_weak();
+        let estado = Rc::clone(&estado);
+        move || {
+            let ui = ui_weak.unwrap();
+            estado.borrow_mut().paciente_em_edicao = None;
+            ui.set_pac_nome("".into());
+            ui.set_pac_telefone("".into());
+            ui.set_pac_email("".into());
+            ui.set_editando_paciente(false);
         }
     });
 
@@ -400,6 +702,7 @@ fn main() -> Result<()> {
             ui.set_reproduzindo(false);
             let duracao = atualizar_info_audio(&ui, &db, id);
             estado.borrow_mut().duracao_audio_s = duracao.unwrap_or(0.0);
+            ui.set_precisa_modelo(!caminho_modelo().exists());
             // Dispositivos de áudio disponíveis (índice 0 = padrão do Windows).
             let entradas = vinculo_audio::listar_entradas();
             let saidas = vinculo_audio::listar_saidas();
@@ -605,6 +908,46 @@ fn main() -> Result<()> {
             }
         },
     );
+    // O timer precisa sobreviver ao retorno desta função (dropá-lo o pararia).
+    std::mem::forget(temporizador_player);
+
+    // ---------- download do modelo de transcrição ----------
+    ui.on_baixar_modelo({
+        let ui_weak = ui.as_weak();
+        move || {
+            let ui = ui_weak.unwrap();
+            ui.set_ocupado(true);
+            ui.set_status_nota("Baixando o modelo de transcrição…".into());
+            let destino = caminho_modelo();
+            let ui_bg = ui.as_weak();
+            std::thread::spawn(move || {
+                let ui_progresso = ui_bg.clone();
+                let resultado = baixar_modelo(&destino, move |pct| {
+                    let _ = ui_progresso.upgrade_in_event_loop(move |ui| {
+                        ui.set_status_nota(
+                            format!("Baixando o modelo de transcrição… {pct}%").into(),
+                        );
+                    });
+                });
+                let _ = ui_bg.upgrade_in_event_loop(move |ui| {
+                    ui.set_ocupado(false);
+                    match resultado {
+                        Ok(()) => {
+                            ui.set_precisa_modelo(false);
+                            ui.set_status_nota(
+                                "Transcrição instalada! Clique em \"Transcrever (local)\"."
+                                    .into(),
+                            );
+                        }
+                        Err(e) => ui.set_status_nota(
+                            format!("Falha no download do modelo: {e}. Verifique a internet e tente novamente.")
+                                .into(),
+                        ),
+                    }
+                });
+            });
+        }
+    });
 
     // ---------- apagar gravação ----------
     ui.on_apagar_gravacao({
@@ -658,15 +1001,13 @@ fn main() -> Result<()> {
                 ui.set_status_nota("Nenhum áudio gravado para esta sessão.".into());
                 return;
             };
-            let modelo = dir_dados().join("models").join("ggml-base.bin");
+            let modelo = caminho_modelo();
             if !modelo.exists() {
+                ui.set_precisa_modelo(true);
                 ui.set_status_nota(
-                    format!(
-                        "Modelo Whisper não encontrado. Baixe ggml-base.bin em \
-                         https://huggingface.co/ggerganov/whisper.cpp e salve em: {}",
-                        modelo.display()
-                    )
-                    .into(),
+                    "A transcrição ainda não está instalada neste computador — \
+                     clique no botão azul abaixo para instalar (uma única vez)."
+                        .into(),
                 );
                 return;
             }
@@ -867,6 +1208,100 @@ fn main() -> Result<()> {
         }
     });
 
-    ui.run()?;
-    Ok(())
+    ui.on_salvar_workspace_ia({
+        let ui_weak = ui.as_weak();
+        move |valor| {
+            let ui = ui_weak.unwrap();
+            match vinculo_ai::salvar_workspace_id(valor.as_str()) {
+                Ok(_) => {
+                    let msg = if valor.trim().is_empty() {
+                        "Workspace ID removido."
+                    } else {
+                        "Workspace ID salvo."
+                    };
+                    ui.set_cfg_status(msg.into());
+                }
+                Err(e) => ui.set_cfg_status(format!("Erro ao salvar o workspace: {e}").into()),
+            }
+        }
+    });
+
+    ui.on_mascarar(|tipo, texto| aplicar_mascara(tipo.as_str(), texto.as_str()).into());
+
+    // ---------- atualizações ----------
+    ui.set_atualizacao_status(format!("Você está na versão {}.", env!("CARGO_PKG_VERSION")).into());
+    {
+        let ui_bg = ui.as_weak();
+        std::thread::spawn(move || {
+            let resultado = verificar_atualizacao();
+            let _ = ui_bg.upgrade_in_event_loop(move |ui| match resultado {
+                Ok(Some((versao, url))) => {
+                    ui.set_atualizacao_url(url.into());
+                    ui.set_atualizacao_disponivel(true);
+                    ui.set_atualizacao_status(
+                        format!(
+                            "Nova versão {versao} disponível — você está na {}.",
+                            env!("CARGO_PKG_VERSION")
+                        )
+                        .into(),
+                    );
+                }
+                Ok(None) => ui.set_atualizacao_status(
+                    format!(
+                        "Você está na versão mais recente ({}).",
+                        env!("CARGO_PKG_VERSION")
+                    )
+                    .into(),
+                ),
+                // Offline ou API indisponível: silêncio, tenta de novo na próxima abertura.
+                Err(_) => {}
+            });
+        });
+    }
+
+    ui.on_atualizar_app({
+        let ui_weak = ui.as_weak();
+        move || {
+            let ui = ui_weak.unwrap();
+            let url = ui.get_atualizacao_url().to_string();
+            if url.is_empty() {
+                return;
+            }
+            ui.set_ocupado(true);
+            ui.set_atualizacao_status("Baixando a atualização…".into());
+            let ui_bg = ui.as_weak();
+            std::thread::spawn(move || {
+                let ui_progresso = ui_bg.clone();
+                let destino = std::env::temp_dir().join("vinculo-atualizacao.novo");
+                let resultado = baixar_arquivo(&url, &destino, move |pct| {
+                    let _ = ui_progresso.upgrade_in_event_loop(move |ui| {
+                        ui.set_atualizacao_status(format!("Baixando a atualização… {pct}%").into());
+                    });
+                })
+                .and_then(|()| {
+                    self_replace::self_replace(&destino)
+                        .map_err(|e| anyhow::anyhow!("falha ao substituir o executável: {e}"))
+                });
+                match resultado {
+                    Ok(()) => {
+                        let _ = std::fs::remove_file(&destino);
+                        // Reinicia já na versão nova.
+                        if let Ok(exe) = std::env::current_exe() {
+                            let _ = std::process::Command::new(exe).spawn();
+                        }
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        let _ = ui_bg.upgrade_in_event_loop(move |ui| {
+                            ui.set_ocupado(false);
+                            ui.set_atualizacao_status(
+                                format!("Falha na atualização: {e}. Tente novamente ou baixe manualmente no GitHub.")
+                                    .into(),
+                            );
+                        });
+                    }
+                }
+            });
+        }
+    });
 }
