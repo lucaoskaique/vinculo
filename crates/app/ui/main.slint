@@ -36,6 +36,45 @@ export struct FinItemVm {
     pago: bool,
 }
 
+// ---------- toast ----------
+
+component Toast inherits Rectangle {
+    in-out property <string> texto;
+    in-out property <string> tipo: "info"; // "sucesso" | "erro" | "aviso" | "info"
+    in-out property <bool> visivel: false;
+
+    background: tipo == "erro" ? #FF3B30
+              : tipo == "sucesso" ? #34C759
+              : tipo == "aviso" ? #FF9500
+              : #0A84FF;
+    border-radius: 10px;
+    width: 320px;
+    drop-shadow-blur: 20px;
+    drop-shadow-offset-y: 6px;
+    drop-shadow-color: #00000030;
+
+    // x/y são definidos no site de uso (precisam de root.width/height)
+    animate y { duration: 280ms; easing: ease-out; }
+
+    opacity: visivel ? 1.0 : 0.0;
+    animate opacity { duration: 220ms; easing: ease-in-out; }
+
+    HorizontalLayout {
+        padding-top: 14px;
+        padding-bottom: 14px;
+        padding-left: 16px;
+        padding-right: 16px;
+        Text {
+            text: texto;
+            color: white;
+            font-size: 13.5px;
+            font-weight: 500;
+            wrap: word-wrap;
+            vertical-alignment: center;
+        }
+    }
+}
+
 // ---------- componentes base ----------
 
 component TituloGrande inherits Text {
@@ -230,6 +269,11 @@ export component MainWindow inherits Window {
     in-out property <string> atualizacao-status;
     in-out property <string> atualizacao-url;
 
+    // Toast
+    in-out property <string> toast-texto;
+    in-out property <string> toast-tipo: "info";
+    in-out property <bool> toast-visivel: false;
+
     // Tela de bloqueio (criptografia do banco)
     in-out property <string> trava-senha;
     in-out property <string> trava-confirma;
@@ -269,6 +313,8 @@ export component MainWindow inherits Window {
     // Invocados pelo Rust quando tarefas em background terminam.
     callback nota-transcrita(string);
     callback rascunho-gerado(string);
+    callback gravacao-finalizada();
+    callback audio-info-carregada(float); // duração em segundos
     callback tarefa-falhou(string);
 
     HorizontalLayout {
@@ -1040,5 +1086,13 @@ export component MainWindow inherits Window {
                 }
             }
         }
+    }
+
+    Toast {
+        x: root.width - self.width - 20px;
+        y: self.visivel ? (root.height - self.height - 20px) : (root.height - self.height + 10px);
+        texto: root.toast-texto;
+        tipo: root.toast-tipo;
+        visivel: root.toast-visivel;
     }
 }
