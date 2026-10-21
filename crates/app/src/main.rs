@@ -500,11 +500,15 @@ fn mostrar_toast(ui: &MainWindow, estado: &Rc<RefCell<Estado>>, texto: &str, tip
     ui.set_toast_visivel(true);
     let ui_weak = ui.as_weak();
     let timer = Timer::default();
-    timer.start(TimerMode::SingleShot, std::time::Duration::from_millis(4000), move || {
-        if let Some(ui) = ui_weak.upgrade() {
-            ui.set_toast_visivel(false);
-        }
-    });
+    timer.start(
+        TimerMode::SingleShot,
+        std::time::Duration::from_millis(4000),
+        move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_toast_visivel(false);
+            }
+        },
+    );
     estado.borrow_mut().timer_toast = Some(timer);
 }
 
@@ -871,7 +875,9 @@ fn configurar_app(ui: &MainWindow, db: Rc<Db>) {
                 2 => "o som do computador",
                 _ => "a sessão online (sua voz + a voz do paciente na chamada)",
             };
-            let caminho = dir_dados().join("audio").join(format!("sessao_{sessao_id}.wav"));
+            let caminho = dir_dados()
+                .join("audio")
+                .join(format!("sessao_{sessao_id}.wav"));
             match vinculo_audio::Gravador::iniciar_com_fonte(&caminho, &fonte) {
                 Ok(gravador) => {
                     estado.borrow_mut().gravador = Some(gravador);
@@ -1078,7 +1084,12 @@ fn configurar_app(ui: &MainWindow, db: Rc<Db>) {
             }
             ui.set_transcricao(texto);
             ui.set_ocupado(false);
-            mostrar_toast(&ui, &estado, "Transcrição concluída — processada localmente, o áudio não saiu desta máquina.", "sucesso");
+            mostrar_toast(
+                &ui,
+                &estado,
+                "Transcrição concluída — processada localmente, o áudio não saiu desta máquina.",
+                "sucesso",
+            );
         }
     });
 
@@ -1096,7 +1107,12 @@ fn configurar_app(ui: &MainWindow, db: Rc<Db>) {
         move || {
             let ui = ui_weak.unwrap();
             ui.set_ocupado(false);
-            mostrar_toast(&ui, &estado, "Gravação salva. Ouça para conferir ou clique em \"Transcrever (local)\".", "sucesso");
+            mostrar_toast(
+                &ui,
+                &estado,
+                "Gravação salva. Ouça para conferir ou clique em \"Transcrever (local)\".",
+                "sucesso",
+            );
             let sessao_aberta = estado.borrow().sessao_aberta;
             if let Some(sessao_id) = sessao_aberta {
                 estado.borrow_mut().duracao_audio_s = 0.0;
@@ -1158,7 +1174,12 @@ fn configurar_app(ui: &MainWindow, db: Rc<Db>) {
             let restaurado = vinculo_ai::desanonimizar(texto.as_str(), &mapa);
             ui.set_rascunho(restaurado.into());
             ui.set_ocupado(false);
-            mostrar_toast(&ui, &estado, "Rascunho gerado. Revise e edite — a decisão profissional é sempre sua.", "sucesso");
+            mostrar_toast(
+                &ui,
+                &estado,
+                "Rascunho gerado. Revise e edite — a decisão profissional é sempre sua.",
+                "sucesso",
+            );
         }
     });
 
