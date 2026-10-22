@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use anyhow::Result;
 use chrono::{Datelike, Local, NaiveDate};
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use vinculo_core::StatusSessao;
 use vinculo_storage::Db;
 
@@ -147,6 +147,7 @@ struct Estado {
     // Nomes reais dos dispositivos; o índice 0 das ComboBoxes é "Padrão do Windows".
     dispositivos_entrada: Vec<String>,
     dispositivos_saida: Vec<String>,
+    timer_toast: Option<Timer>,
 }
 
 /// "200", "200,50" ou "1.200,50" → centavos.
@@ -284,11 +285,40 @@ fn formatar_duracao(segundos: f64) -> String {
     format!("{:02}:{:02}", total / 60, total % 60)
 }
 
-/// Atualiza na UI a existência, duração e forma de onda do áudio da sessão.
-/// Retorna a duração em segundos (None quando não há áudio).
-fn atualizar_info_audio(ui: &MainWindow, db: &Db, sessao_id: i64) -> Option<f64> {
+/// Limpa a UI de áudio (sem arquivo). Rápido, pode rodar na UI thread.
+fn limpar_info_audio(ui: &MainWindow) {
     ui.set_progresso_audio(0.0);
     ui.set_confirmar_apagar(false);
+    ui.set_tem_audio(false);
+    ui.set_duracao_audio("".into());
+    ui.set_forma_onda(ModelRc::new(VecModel::from(Vec::<f32>::new())));
+}
+
+/// Inicia a carga assíncrona de duração + forma de onda de um arquivo de áudio.
+/// Navega a UI para o estado "tem áudio" imediatamente e atualiza quando terminar.
+fn iniciar_carga_audio_async(ui: &MainWindow, caminho: PathBuf) {
+    ui.set_progresso_audio(0.0);
+    ui.set_confirmar_apagar(false);
+    ui.set_tem_audio(true);
+    ui.set_duracao_audio("…".into());
+    ui.set_forma_onda(ModelRc::new(VecModel::from(Vec::<f32>::new())));
+    let ui_bg = ui.as_weak();
+    std::thread::spawn(move || {
+        let duracao = vinculo_audio::duracao_wav(&caminho).ok();
+        let picos = vinculo_audio::forma_de_onda(&caminho, 240).unwrap_or_default();
+        let duracao_str = duracao.map(formatar_duracao).unwrap_or_default();
+        let duracao_s = duracao.unwrap_or(0.0) as f32;
+        let _ = ui_bg.upgrade_in_event_loop(move |ui| {
+            ui.set_duracao_audio(duracao_str.into());
+            ui.set_forma_onda(ModelRc::new(VecModel::from(picos)));
+            ui.invoke_audio_info_carregada(duracao_s);
+        });
+    });
+}
+
+/// Consulta o banco e inicia a carga de áudio (síncrono somente para o caminho;
+/// a leitura pesada do WAV é assíncrona). Use onde a perf importa.
+fn atualizar_info_audio(ui: &MainWindow, db: &Db, sessao_id: i64) {
     let caminho = db
         .nota_da_sessao(sessao_id)
         .ok()
@@ -297,20 +327,8 @@ fn atualizar_info_audio(ui: &MainWindow, db: &Db, sessao_id: i64) -> Option<f64>
         .map(PathBuf::from)
         .filter(|p| p.exists());
     match caminho {
-        Some(p) => {
-            ui.set_tem_audio(true);
-            let duracao = vinculo_audio::duracao_wav(&p).ok();
-            ui.set_duracao_audio(duracao.map(formatar_duracao).unwrap_or_default().into());
-            let picos = vinculo_audio::forma_de_onda(&p, 240).unwrap_or_default();
-            ui.set_forma_onda(ModelRc::new(VecModel::from(picos)));
-            duracao
-        }
-        None => {
-            ui.set_tem_audio(false);
-            ui.set_duracao_audio("".into());
-            ui.set_forma_onda(ModelRc::new(VecModel::from(Vec::<f32>::new())));
-            None
-        }
+        Some(p) => iniciar_carga_audio_async(ui, p),
+        None => limpar_info_audio(ui),
     }
 }
 
@@ -474,6 +492,26 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Mostra um toast e auto-descarta após 4 segundos.
+/// `tipo`: "sucesso" | "erro" | "aviso" | "info"
+fn mostrar_toast(ui: &MainWindow, estado: &Rc<RefCell<Estado>>, texto: &str, tipo: &str) {
+    ui.set_toast_texto(texto.into());
+    ui.set_toast_tipo(tipo.into());
+    ui.set_toast_visivel(true);
+    let ui_weak = ui.as_weak();
+    let timer = Timer::default();
+    timer.start(
+        TimerMode::SingleShot,
+        std::time::Duration::from_millis(4000),
+        move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_toast_visivel(false);
+            }
+        },
+    );
+    estado.borrow_mut().timer_toast = Some(timer);
+}
+
 /// Registra todos os callbacks e carrega os dados iniciais.
 /// Só é chamado após o desbloqueio do banco criptografado.
 fn configurar_app(ui: &MainWindow, db: Rc<Db>) {
@@ -492,6 +530,7 @@ fn configurar_app(ui: &MainWindow, db: Rc<Db>) {
         mapa_anon: Vec::new(),
         dispositivos_entrada: Vec::new(),
         dispositivos_saida: Vec::new(),
+        timer_toast: None,
     }));
 
     recarregar_agenda(ui, &db, hoje);
@@ -685,12 +724,13 @@ fn configurar_app(ui: &MainWindow, db: Rc<Db>) {
             ui.set_sessao_titulo(
                 format!("{} — {}", nome, sessao.inicio.format("%d/%m/%Y %H:%M")).into(),
             );
-            let transcricao = db
-                .nota_da_sessao(id)
-                .ok()
-                .flatten()
-                .and_then(|(_, t)| t)
-                .unwrap_or_default();
+            // Uma única query traz transcrição e caminho de áudio.
+            let nota = db.nota_da_sessao(id).ok().flatten();
+            let transcricao = nota.as_ref().and_then(|(_, t)| t.clone()).unwrap_or_default();
+            let caminho_audio = nota
+                .and_then(|(audio, _)| audio)
+                .map(PathBuf::from)
+                .filter(|p| p.exists());
             ui.set_transcricao(transcricao.into());
             ui.set_rascunho("".into());
             ui.set_gravando(false);
@@ -700,8 +740,11 @@ fn configurar_app(ui: &MainWindow, db: Rc<Db>) {
                 reprodutor.parar();
             }
             ui.set_reproduzindo(false);
-            let duracao = atualizar_info_audio(&ui, &db, id);
-            estado.borrow_mut().duracao_audio_s = duracao.unwrap_or(0.0);
+            estado.borrow_mut().duracao_audio_s = 0.0;
+            match caminho_audio {
+                Some(p) => iniciar_carga_audio_async(&ui, p),
+                None => limpar_info_audio(&ui),
+            };
             ui.set_precisa_modelo(!caminho_modelo().exists());
             // Dispositivos de áudio disponíveis (índice 0 = padrão do Windows).
             let entradas = vinculo_audio::listar_entradas();
@@ -786,22 +829,26 @@ fn configurar_app(ui: &MainWindow, db: Rc<Db>) {
             }
             let gravador_ativo = estado.borrow_mut().gravador.take();
             if let Some(gravador) = gravador_ativo {
+                ui.set_gravando(false);
                 ui.set_status_nota("Finalizando gravação e mixando as fontes…".into());
                 match gravador.parar() {
-                    Ok(()) => {
-                        ui.set_status_nota(
-                            "Gravação finalizada. Ouça para conferir ou clique em \"Transcrever (local)\"."
-                                .into(),
-                        );
-                        let sessao_aberta = estado.borrow().sessao_aberta;
-                        if let Some(sessao_id) = sessao_aberta {
-                            let duracao = atualizar_info_audio(&ui, &db, sessao_id);
-                            estado.borrow_mut().duracao_audio_s = duracao.unwrap_or(0.0);
-                        }
+                    Ok(tarefa) => {
+                        ui.set_ocupado(true);
+                        let ui_bg = ui.as_weak();
+                        std::thread::spawn(move || {
+                            let resultado = tarefa.executar();
+                            let _ = ui_bg.upgrade_in_event_loop(move |ui| match resultado {
+                                Ok(()) => ui.invoke_gravacao_finalizada(),
+                                Err(e) => ui.invoke_tarefa_falhou(
+                                    format!("Erro ao finalizar gravação: {e}").into(),
+                                ),
+                            });
+                        });
                     }
-                    Err(e) => ui.set_status_nota(format!("Erro ao finalizar gravação: {e}").into()),
+                    Err(e) => {
+                        ui.set_status_nota(format!("Erro ao finalizar gravação: {e}").into());
+                    }
                 }
-                ui.set_gravando(false);
                 return;
             }
             let (sessao_id, microfone, saida) = {
@@ -828,7 +875,9 @@ fn configurar_app(ui: &MainWindow, db: Rc<Db>) {
                 2 => "o som do computador",
                 _ => "a sessão online (sua voz + a voz do paciente na chamada)",
             };
-            let caminho = dir_dados().join("audio").join(format!("sessao_{sessao_id}.wav"));
+            let caminho = dir_dados()
+                .join("audio")
+                .join(format!("sessao_{sessao_id}.wav"));
             match vinculo_audio::Gravador::iniciar_com_fonte(&caminho, &fonte) {
                 Ok(gravador) => {
                     estado.borrow_mut().gravador = Some(gravador);
@@ -1035,10 +1084,40 @@ fn configurar_app(ui: &MainWindow, db: Rc<Db>) {
             }
             ui.set_transcricao(texto);
             ui.set_ocupado(false);
-            ui.set_status_nota(
-                "Transcrição concluída — processada localmente, o áudio não saiu desta máquina."
-                    .into(),
+            mostrar_toast(
+                &ui,
+                &estado,
+                "Transcrição concluída — processada localmente, o áudio não saiu desta máquina.",
+                "sucesso",
             );
+        }
+    });
+
+    ui.on_audio_info_carregada({
+        let estado = Rc::clone(&estado);
+        move |duracao_s| {
+            estado.borrow_mut().duracao_audio_s = duracao_s as f64;
+        }
+    });
+
+    ui.on_gravacao_finalizada({
+        let ui_weak = ui.as_weak();
+        let db = Rc::clone(&db);
+        let estado = Rc::clone(&estado);
+        move || {
+            let ui = ui_weak.unwrap();
+            ui.set_ocupado(false);
+            mostrar_toast(
+                &ui,
+                &estado,
+                "Gravação salva. Ouça para conferir ou clique em \"Transcrever (local)\".",
+                "sucesso",
+            );
+            let sessao_aberta = estado.borrow().sessao_aberta;
+            if let Some(sessao_id) = sessao_aberta {
+                estado.borrow_mut().duracao_audio_s = 0.0;
+                atualizar_info_audio(&ui, &db, sessao_id);
+            }
         }
     });
 
@@ -1095,18 +1174,22 @@ fn configurar_app(ui: &MainWindow, db: Rc<Db>) {
             let restaurado = vinculo_ai::desanonimizar(texto.as_str(), &mapa);
             ui.set_rascunho(restaurado.into());
             ui.set_ocupado(false);
-            ui.set_status_nota(
-                "Rascunho gerado. Revise e edite — a decisão profissional é sempre sua.".into(),
+            mostrar_toast(
+                &ui,
+                &estado,
+                "Rascunho gerado. Revise e edite — a decisão profissional é sempre sua.",
+                "sucesso",
             );
         }
     });
 
     ui.on_tarefa_falhou({
         let ui_weak = ui.as_weak();
+        let estado = Rc::clone(&estado);
         move |mensagem| {
             let ui = ui_weak.unwrap();
             ui.set_ocupado(false);
-            ui.set_status_nota(mensagem);
+            mostrar_toast(&ui, &estado, mensagem.as_str(), "erro");
         }
     });
 

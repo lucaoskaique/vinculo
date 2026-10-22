@@ -199,12 +199,13 @@ impl Gravador {
         })
     }
 
-    /// Para a captura, mixa as fontes e finaliza o arquivo WAV final
-    /// (mono, 16 kHz, i16) em `caminho_wav`.
+    /// Para os streams e finaliza os escritores temporários, retornando uma
+    /// [`TarefaMixagem`] que pode ser executada em uma thread separada.
     ///
-    /// A mixagem é feita offline e de forma síncrona (pode levar alguns
-    /// segundos em gravações longas).
-    pub fn parar(self) -> Result<()> {
+    /// Deve ser chamado na mesma thread onde o `Gravador` foi criado (due à
+    /// restrição `!Send` de `cpal::Stream`). A `TarefaMixagem` retornada é
+    /// `Send` e pode ser passada para outra thread para não bloquear a UI.
+    pub fn parar(self) -> Result<TarefaMixagem> {
         // Para todos os streams antes de finalizar os arquivos.
         drop(self.streams);
 
@@ -230,10 +231,32 @@ impl Gravador {
             caminhos_tmp.push(captura.caminho_tmp.clone());
         }
 
-        // Mixagem offline: carrega cada temporário como mono f32 a 16 kHz e
-        // soma amostra a amostra com saturação.
+        Ok(TarefaMixagem {
+            caminhos_tmp,
+            caminho_final: self.caminho_final,
+        })
+    }
+}
+
+/// Tarefa de mixagem e escrita do WAV final, separada da parada dos streams.
+///
+/// Criada por [`Gravador::parar`] depois que os streams foram parados e os
+/// escritores temporários finalizados. Como é `Send`, pode ser movida para
+/// outra thread e executada sem bloquear a UI.
+pub struct TarefaMixagem {
+    caminhos_tmp: Vec<PathBuf>,
+    caminho_final: PathBuf,
+}
+
+impl TarefaMixagem {
+    /// Mixa as fontes temporárias e escreve o WAV final (mono, 16 kHz, i16).
+    ///
+    /// Operação pesada: carrega os arquivos temporários na memória, faz
+    /// reamostragem e mixagem, e escreve o resultado em disco. Execute em
+    /// uma thread separada para não bloquear a UI.
+    pub fn executar(self) -> Result<()> {
         let mut mixado: Vec<f32> = Vec::new();
-        for caminho in &caminhos_tmp {
+        for caminho in &self.caminhos_tmp {
             let amostras = carregar_wav_mono_16k(caminho).with_context(|| {
                 format!(
                     "falha ao carregar o WAV temporário '{}' para mixagem",
@@ -245,8 +268,7 @@ impl Gravador {
 
         escrever_wav_mono_16k(&self.caminho_final, &mixado)?;
 
-        // Apaga os temporários (ignora erros de remoção).
-        for caminho in &caminhos_tmp {
+        for caminho in &self.caminhos_tmp {
             let _ = std::fs::remove_file(caminho);
         }
 

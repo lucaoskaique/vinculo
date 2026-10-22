@@ -1,6 +1,6 @@
 name: Release
 
-# Builds multiplataforma rodam SOMENTE em tags de versão (v0.1.0, v0.2.0, …).
+# Multi-platform builds run ONLY on version tags (v0.1.0, v0.2.0, …).
 on:
   push:
     tags: ["v*"]
@@ -10,87 +10,91 @@ permissions:
 
 jobs:
   build:
-    name: ${{ matrix.alvo }}
+    name: ${{ matrix.target }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
-            alvo: windows-x64
-            binario: vinculo.exe
-            artefato: vinculo-windows-x64.exe
+            target: windows-x64
+            binary: vinculo.exe
+            artifact: vinculo-windows-x64.exe
           - os: macos-latest
-            alvo: macos-arm64
-            binario: vinculo
-            artefato: vinculo-macos-arm64
-          # Runners Intel gratuitos (macos-13) foram aposentados pelo GitHub;
-          # o binário Intel é cross-compilado no runner ARM.
+            target: macos-arm64
+            binary: vinculo
+            artifact: vinculo-macos-arm64
+          # Free Intel runners (macos-13) were retired by GitHub;
+          # the Intel binary is cross-compiled on the ARM runner.
           - os: macos-latest
-            alvo: macos-x64
-            target: x86_64-apple-darwin
-            binario: vinculo
-            artefato: vinculo-macos-x64
+            target: macos-x64
+            rust_target: x86_64-apple-darwin
+            binary: vinculo
+            artifact: vinculo-macos-x64
           - os: ubuntu-latest
-            alvo: linux-x64
-            binario: vinculo
-            artefato: vinculo-linux-x64
+            target: linux-x64
+            binary: vinculo
+            artifact: vinculo-linux-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: Confere versão do Cargo vs tag
+      - name: Check Cargo version vs tag
         shell: bash
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           VER=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
           if [ "$TAG" != "$VER" ]; then
-            echo "::error::Tag v$TAG não bate com a versão $VER do Cargo.toml (o auto-update compara versões)."
+            echo "::error::Tag v$TAG does not match version $VER in Cargo.toml (the auto-updater compares versions)."
             exit 1
           fi
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target || '' }}
+          targets: ${{ matrix.rust_target || '' }}
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Dependências (Linux)
+      - name: Dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake clang pkg-config libasound2-dev libssl-dev libfontconfig1-dev
 
-      - name: libclang (Windows)
+      - name: libclang and perl (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+        run: |
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+          # The MSYS2 perl (from Git) takes priority in PATH but lacks the
+          # modules that OpenSSL's Configure requires; force Strawberry Perl.
+          echo "OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe" >> $env:GITHUB_ENV
 
       - name: Build
         shell: bash
         run: |
-          if [ -n "${{ matrix.target }}" ]; then
-            cargo build --release -p vinculo --target "${{ matrix.target }}"
+          if [ -n "${{ matrix.rust_target }}" ]; then
+            cargo build --release -p vinculo --target "${{ matrix.rust_target }}"
           else
             cargo build --release -p vinculo
           fi
 
-      - name: Renomear binário
+      - name: Rename binary
         shell: bash
         run: |
-          if [ -n "${{ matrix.target }}" ]; then
-            cp "target/${{ matrix.target }}/release/${{ matrix.binario }}" "${{ matrix.artefato }}"
+          if [ -n "${{ matrix.rust_target }}" ]; then
+            cp "target/${{ matrix.rust_target }}/release/${{ matrix.binary }}" "${{ matrix.artifact }}"
           else
-            cp "target/release/${{ matrix.binario }}" "${{ matrix.artefato }}"
+            cp "target/release/${{ matrix.binary }}" "${{ matrix.artifact }}"
           fi
 
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artefato }}
-          path: ${{ matrix.artefato }}
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
 
-      # Instalador do Windows (Inno Setup): instala por usuário em
-      # %LOCALAPPDATA%\Programs\Vinculo, com atalhos e desinstalador.
-      - name: Instalador (Windows)
+      # Windows installer (Inno Setup): installs per-user under
+      # %LOCALAPPDATA%\Programs\Vinculo with shortcuts and an uninstaller.
+      - name: Installer (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -98,15 +102,15 @@ jobs:
           $env:VINCULO_VERSAO = "$env:GITHUB_REF_NAME".TrimStart("v")
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" instalador\vinculo.iss
 
-      - name: Publicar artefato do instalador
+      - name: Upload installer artifact
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v7
         with:
           name: vinculo-setup-windows.exe
           path: instalador/Output/vinculo-setup-windows.exe
 
-  publicar:
-    name: publicar release
+  publish:
+    name: publish release
     needs: build
     runs-on: ubuntu-latest
     permissions:
